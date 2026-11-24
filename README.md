@@ -20,7 +20,10 @@
 
 ```mermaid
 flowchart LR
-    A["录制 / 导入"] --> B["反编译"] --> C["编排"] --> D["绑键"] --> E["执行"]
+    A["录制 / 导入"] --> B["反编译"]
+    B --> C["编排"]
+    C --> D["绑键"]
+    D --> E["执行"]
     style A fill:#0f2534,stroke:#2b6f8f,color:#bfe6f5
     style B fill:#1a2436,stroke:#4c5f80,color:#d5e0f0
     style C fill:#0f2534,stroke:#2b6f8f,color:#bfe6f5
