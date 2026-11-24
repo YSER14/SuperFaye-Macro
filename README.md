@@ -248,8 +248,8 @@ docs/                    README 用的图
 
 ```powershell
 .\start.bat --check
-$py = Get-ChildItem "$env:LOCALAPPDATA\SuperFaye-Macro\runtime-*\Scripts\python.exe" | Select-Object -First 1 -ExpandProperty FullName
-& $py -m unittest discover -s automation/tests -t . -v
+$rt = Get-ChildItem "$env:LOCALAPPDATA\SuperFaye-Macro\runtime-*" -Directory | Select-Object -First 1
+& "$($rt.FullName)\Scripts\python.exe" -m unittest discover -s automation/tests -t . -v
 ```
 
 覆盖图编译器、执行引擎与处理器、宏触发、键盘播放、反向编译、AI 草稿和发布安全检查。AI 草稿那 13 项依赖 `pydantic-ai`，其余 100 项不装第三方包也能过。
