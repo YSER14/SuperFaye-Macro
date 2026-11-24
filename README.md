@@ -77,14 +77,7 @@ XMBC 的 <code>{TAG}</code> 串和旧 JSON 宏一键反编译成节点图，表�
 
 ## 界面
 
-<div align="center">
-  <img src="docs/ui-settings.png" alt="SuperFaye-Macro 界面截图：全局设置" width="100%">
-  <sub>实际运行截图 · 全局设置（进阶）</sub>
-</div>
-
-<br>
-
-左侧五个页签：
+窗口一开，左侧是竖排的五个页签，右侧是内容区；上方横着四张状态卡：运行实例、全局暂停、录制状态、动作/轨迹。左下角三个总开关：启动全局监听、全局暂停、停止全部宏。
 
 | 页签 | 干什么 |
 | --- | --- |
@@ -237,7 +230,7 @@ macro_io/                宏解析、反向编译、宏树读写
 recorder/                录制、轨迹化简、3D 视角记录
 webui/                   前端页面与模块、图标字库
 bin/                     依赖哈希清单与驱动安装脚本
-docs/                    README 用的图与实机截图
+docs/                    README 用的横幅、流程图与徽章
 ```
 
 </details>
