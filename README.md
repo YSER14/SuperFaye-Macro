@@ -4,11 +4,11 @@
 
 <div align="center">
 
-[![License](https://img.shields.io/github/license/YSER14/SuperFaye-Macro?style=flat-square&color=2ea44f)](LICENSE)
-[![Platform](https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-0078D4?style=flat-square&logo=windows&logoColor=white)](#环境要求)
-[![Python](https://img.shields.io/badge/python-3.12%20x64-3776AB?style=flat-square&logo=python&logoColor=white)](#环境要求)
-[![Tests](https://img.shields.io/badge/tests-101%20cases-brightgreen?style=flat-square)](#测试)
-[![Last commit](https://img.shields.io/github/last-commit/YSER14/SuperFaye-Macro?style=flat-square)](https://github.com/YSER14/SuperFaye-Macro/commits/main)
+[![license](docs/badges/license.svg)](LICENSE)
+![platform](docs/badges/platform.svg)
+![python](docs/badges/python.svg)
+![tests](docs/badges/tests.svg)
+![ui](docs/badges/ui.svg)
 
 </div>
 
@@ -20,10 +20,7 @@
 
 ```mermaid
 flowchart LR
-    A["录制 / 手写 / 导入<br/>XMBC · JSON"] --> B["自动反编译<br/>成节点图"]
-    B --> C["编辑与编排<br/>动作列表 · 时间轴 · 画布"]
-    C --> D["绑定触发键"]
-    D --> E["执行<br/>SendInput · Interception"]
+    A["录制 / 导入"] --> B["反编译"] --> C["编排"] --> D["绑键"] --> E["执行"]
     style A fill:#0f2534,stroke:#2b6f8f,color:#bfe6f5
     style B fill:#1a2436,stroke:#4c5f80,color:#d5e0f0
     style C fill:#0f2534,stroke:#2b6f8f,color:#bfe6f5
