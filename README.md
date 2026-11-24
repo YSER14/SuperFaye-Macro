@@ -61,6 +61,8 @@ Interception 默认关闭。要启用它，从官方发行页下载并解压，�
 
 ## 来源与许可
 
-本项目基于 Masclrin 的 MacroDriver WebUI，公开发布待确认上游再发布授权和适用许可证。[上游许可证说明](https://github.com/Masclrin/MacroDriver-WebUI/blob/716160d3cd25631dadd788a49045651620e73883/README.md)
+本项目以 [MIT 许可证](LICENSE)发布，版权归 YS14。
+
+项目基于 [Masclrin/MacroDriver-WebUI](https://github.com/Masclrin/MacroDriver-WebUI) 开发。上游仓库未声明适用许可证，本仓库的 MIT 授权仅覆盖本项目自身的修改与新增部分，不改变上游代码的版权归属；商用或再分发上游代码前请先取得上游作者授权，并以其说明为准（[上游 README](https://github.com/Masclrin/MacroDriver-WebUI/blob/716160d3cd25631dadd788a49045651620e73883/README.md)）。
 
 自动化编辑器使用 Font Awesome Free 6.5.0 的本地样式和字库。组件附带其[许可证](webui/vendor/fontawesome/LICENSE.txt)。
