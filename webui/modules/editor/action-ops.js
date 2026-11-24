@@ -299,6 +299,50 @@ export function moveActionsToTarget(sourcePaths, target, showToast) {
   return true;
 }
 
+/**
+ * 批量删除：一次把选中的动作全删掉（多选之后点一下「删除选中」就该一起走）。
+ *
+ * 用对象身份摘除、不按下标删 —— 前面的删除让后面的下标错位也不会删错行；
+ * 父块（循环 / 宏组）被删时它里面的子项自然跟着走，不用单独再删一遍。
+ *
+ * 返回 { paths, count, focusPath }：paths 是真正删掉的路径，count 是条数，
+ * focusPath 是删完之后建议选中的位置（列表删空了就是 null）。
+ */
+export function deleteActionPaths(paths) {
+  const list = normalizeActionPaths(paths);
+  if (!list.length) return { paths: [], count: 0, focusPath: null };
+
+  const targets = [];
+  list.forEach((path) => {
+    const info = getActionAndContainerByPath(path);
+    if (info) targets.push({ path, container: info.container, index: info.index, action: info.action });
+  });
+  if (!targets.length) return { paths: [], count: 0, focusPath: null };
+
+  const byContainer = new Map();
+  targets.forEach((target) => {
+    if (!byContainer.has(target.container)) byContainer.set(target.container, new Set());
+    byContainer.get(target.container).add(target.action);
+  });
+  byContainer.forEach((set, container) => {
+    for (let i = container.length - 1; i >= 0; i -= 1) {
+      if (set.has(container[i])) container.splice(i, 1);
+    }
+  });
+
+  // 落点：第一条被删动作原来的位置；它所在的容器整个被删掉了就退回列表末尾
+  const anchor = targets[0];
+  const containerPath = findContainerPath(anchor.container);
+  let focusPath = null;
+  if (Array.isArray(containerPath)) {
+    const index = Math.min(anchor.index, anchor.container.length - 1);
+    if (index >= 0) focusPath = containerPath.length ? [...containerPath, index] : [index];
+  }
+  if (!focusPath && state.editorRows.length) focusPath = [state.editorRows.length - 1];
+
+  return { paths: targets.map((target) => target.path), count: targets.length, focusPath };
+}
+
 export function resolveInsertTargetAfterSelection() {  if (!Array.isArray(state.selectedActionPath) || !state.selectedActionPath.length) {
     return { type: 'root', index: state.editorRows.length };
   }

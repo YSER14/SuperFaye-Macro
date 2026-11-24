@@ -1,26 +1,20 @@
-<div align="center">
-  <img src="docs/banner.svg" alt="SuperFaye-Macro" width="100%">
-</div>
+# SuperFaye-Macro
 
-<div align="center">
+**Windows 键鼠宏编辑器** —— 把「一行宏」变成看得见、改得动的动作列表与流程图。
 
-[![license](docs/badges/license.svg)](LICENSE)
-![platform](docs/badges/platform.svg)
-![python](docs/badges/python.svg)
-![tests](docs/badges/tests.svg)
-![ui](docs/badges/ui.svg)
-
-</div>
-
-<br>
+`MIT 许可` · `Windows 10 / 11` · `Python 3.12 x64` · `101 项单元测试` · [下载使用](#快速开始)
 
 **SuperFaye-Macro** 是一个跑在 Windows 本地的键鼠宏编辑器。你录一段操作，或者把手里已有的 XMBC 宏串、旧版 JSON 宏丢进去，它会把这一串动作摊开成能看、能改、能拖的列表与流程图，再绑到某个键上一键跑起来。
 
 界面是本地 WebView 窗口，不用开浏览器，也不用联网。
 
-<div align="center">
-  <img src="docs/flow.svg" alt="工作流：录制或导入 → 反编译 → 编排 → 绑键 → 执行" width="100%">
-</div>
+整条链路是五步：
+
+1. **录制 / 导入** —— XMBC 宏串、旧版 JSON 宏，或者直接手录
+2. **反编译** —— 自动拆成节点图
+3. **编排** —— 动作列表、时间轴、节点画布，三种视图看同一份数据
+4. **绑键** —— 设触发方式与重复次数
+5. **执行** —— SendInput 或 Interception 后端
 
 ---
 
@@ -230,7 +224,6 @@ macro_io/                宏解析、反向编译、宏树读写
 recorder/                录制、轨迹化简、3D 视角记录
 webui/                   前端页面与模块、图标字库
 bin/                     依赖哈希清单与驱动安装脚本
-docs/                    README 用的横幅、流程图与徽章
 ```
 
 </details>

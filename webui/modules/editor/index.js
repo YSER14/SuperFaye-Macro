@@ -11,7 +11,7 @@ import {
   readStoredViewMode,
 } from './action-xmbc.js';
 import { normalizeMacroRows, pathKey, keyToPath, flattenGroups, isContainerAction } from './action-model.js';
-import { setSelectedLine, insertActionAtTarget, moveActionsToTarget, resolveInsertTargetAfterSelection, getActionAndContainerByPath, getActionAtPath, clearExpandedLoopKeysByPrefix } from './action-ops.js';
+import { setSelectedLine, insertActionAtTarget, moveActionsToTarget, resolveInsertTargetAfterSelection, getActionAtPath, clearExpandedLoopKeysByPrefix, deleteActionPaths } from './action-ops.js';
 import { fillActionEditorByAction, buildActionFromInputs, ensureActionFormDefaultsForType } from './action-form.js';
 import { renderActionList, refreshBatchCommentButton, updateCurrentActionFromEditor, saveGroupToLibraryFromPath, readDraggedPaths, clearMultiSelection } from './action-list-render.js';
 import { renderBlockPalette, readPaletteDrag, dropPalettePayload } from './block-palette.js';
@@ -38,6 +38,9 @@ async function loadMacroToEditor(path) {
   // 打开宏默认把顶层的循环 / 宏组摊开：折叠着的循环看着就跟「没生效」一样
   state.expandedLoopPathKeys = topLevelContainerKeys(state.editorRows);
   state.inlineEditingPathKey = null;
+  // 换文件就把多选队列清掉：旧文件里的路径在新文件里可能刚好指到别的动作，留着会误删
+  state.selectedActionPaths = [];
+  state.multiSelectVisibleCount = 0;
 
   if (state.editorRows.length) {
     setSelectedLine([0], 'action');
@@ -213,6 +216,8 @@ function bindEditorActions() {
     state.editorRows = [];
     state.expandedLoopPathKeys = new Set();
     state.inlineEditingPathKey = null;
+    state.selectedActionPaths = [];
+    state.multiSelectVisibleCount = 0;
     setSelectedLine(null, 'action');
     ensureActionFormDefaultsForType(q('#actionType').value || 'kd', true);
     resetHistory();
@@ -272,39 +277,42 @@ function bindEditorActions() {
     }
   });
 
+  // 「删除选中」：多选队列里有什么就一次删完（不是只删最后点的那一条）
   q('#btnDeleteAction').addEventListener('click', () => {
-    if (!Array.isArray(state.selectedActionPath) || !state.selectedActionPath.length) {
+    const paths = state.selectedActionPaths.length
+      ? state.selectedActionPaths
+      : (Array.isArray(state.selectedActionPath) && state.selectedActionPath.length ? [state.selectedActionPath] : []);
+
+    if (!paths.length) {
       showToast('请先选择一个动作');
       return;
     }
 
-    const info = getActionAndContainerByPath(state.selectedActionPath);
-    if (!info) {
+    const result = deleteActionPaths(paths);
+    if (!result.count) {
       showToast('选中动作已失效，请重新选择');
+      renderActionList();
       return;
     }
 
-    const removedPath = [...state.selectedActionPath];
-    info.container.splice(info.index, 1);
+    result.paths.forEach((path) => clearExpandedLoopKeysByPrefix(path));
     state.inlineEditingPathKey = null;
-    clearExpandedLoopKeysByPrefix(removedPath);
+    state.selectedActionPaths = [];
+    state.multiSelectVisibleCount = 0;
 
-    if (info.container.length > 0) {
-      const nextIndex = Math.min(info.index, info.container.length - 1);
-      const nextPath = [...removedPath.slice(0, -1), nextIndex];
-      setSelectedLine(nextPath, 'action');
-      const selected = getActionAtPath(nextPath);
-      if (selected) fillActionEditorByAction(selected);
-    } else if (!removedPath.slice(0, -1).length) {
+    const nextAction = Array.isArray(result.focusPath) ? getActionAtPath(result.focusPath) : null;
+    if (nextAction) {
+      setSelectedLine(result.focusPath, 'action');
+      fillActionEditorByAction(nextAction);
+    } else {
       setSelectedLine(null, 'action');
       ensureActionFormDefaultsForType(q('#actionType').value || 'kd', true);
-    } else {
-      setSelectedLine(removedPath.slice(0, -1), 'action');
-      const selected = getActionAtPath(removedPath.slice(0, -1));
-      if (selected) fillActionEditorByAction(selected);
     }
 
     renderActionList();
+    showToast(result.count > 1
+      ? `一次删除了 ${result.count} 条动作（Ctrl+Z 可撤销）`
+      : '已删除 1 条动作（Ctrl+Z 可撤销）');
   });
 
   q('#btnSaveEditor').addEventListener('click', async () => {

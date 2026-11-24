@@ -2,7 +2,6 @@
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8" />
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; frame-src 'self'; base-uri 'none'; form-action 'none'" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>宏锻控制台</title>
   <script>
@@ -15,6 +14,7 @@
       } catch (e) { /* 忽略 */ }
     })();
   </script>
+  <link rel="icon" type="image/png" href="assets/icon.png" />
   <link rel="stylesheet" href="theme.css" />
   <link rel="stylesheet" href="styles.css" />
   <link rel="stylesheet" href="assistant.css" />
@@ -24,7 +24,7 @@
   <div class="app-shell">
     <aside class="sidebar">
       <div class="brand">
-        <div class="brand-mark" aria-hidden="true">宏</div>
+        <div class="brand-mark"><img src="assets/icon.png" alt="超级小葉宏" /></div>
         <div>
           <h1>宏锻控制台</h1>
           <p>高精度宏自动化</p>
@@ -258,7 +258,7 @@
                 <button id="btnUpdateAction">应用修改</button>
                 <button id="btnInsertBelow">在下面插入</button>
                 <button id="btnAppendAction">加到末尾</button>
-                <button id="btnDeleteAction" class="danger">删除选中</button>
+                <button id="btnDeleteAction" class="danger" title="多选之后点这里：选中的动作一次全部删掉（父块被删时里面的动作跟着走，Ctrl+Z 可撤销）">删除选中</button>
               </div>
             </div>
             <hr />
@@ -308,7 +308,8 @@
             <div class="hint-row">
               <p class="hint">拖块拼宏：循环 / 宏组可嵌套、能在容器间拖排；双击块改参数，宏组头「⤓ 存组」可复用。
                 要一次搬多条：点一下加入多选、再点一下移出（Ctrl 点击只留这一条，Shift 点击选一段），
-                然后拖其中任意一条（拖到宏组头上就是收进那组）。</p>
+                然后拖其中任意一条（拖到宏组头上就是收进那组）。
+                多选之后按「删除选中」＝一次删完所有选中项，不是只删一条。</p>
               <div class="view-switch" id="actionViewSwitch" role="group" aria-label="动作列表显示方式">
                 <button type="button" class="mini-btn active" data-view-mode="block" title="积木块：一行一个动作，中文描述（默认）">积木块</button>
                 <button type="button" class="mini-btn" data-view-mode="timeline" title="罗技式方块：动作与延迟各占一块，整片横向流式排布、块间箭头相连，顶栏配生成的宏代码；只改显示不改文件">罗技时间轴</button>

@@ -213,7 +213,7 @@ export function refreshMultiSelectBar() {
   const text = q('#multiSelectText');
   if (text) {
     const extra = actions > count ? `（共 ${actions} 条动作）` : '';
-    text.textContent = `已选 ${count} 项${extra} · 点一下加入、再点一下移出；Ctrl 点击只留这一项；Shift 点击选一段；Esc 或点空白取消。拖任意一项到宏组 / 循环 / 目标位置，整批一起搬`;
+    text.textContent = `已选 ${count} 项${extra} · 点一下加入、再点一下移出；Ctrl 点击只留这一项；Shift 点击选一段；Esc 或点空白取消。「删除选中」一次删完全部选中项；拖任意一项到宏组 / 循环 / 目标位置，整批一起搬`;
   }
 }
 
