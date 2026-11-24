@@ -18,18 +18,9 @@
 
 界面是本地 WebView 窗口，不用开浏览器，也不用联网。
 
-```mermaid
-flowchart LR
-    A["录制 / 导入"] --> B["反编译"]
-    B --> C["编排"]
-    C --> D["绑键"]
-    D --> E["执行"]
-    style A fill:#0f2534,stroke:#2b6f8f,color:#bfe6f5
-    style B fill:#1a2436,stroke:#4c5f80,color:#d5e0f0
-    style C fill:#0f2534,stroke:#2b6f8f,color:#bfe6f5
-    style D fill:#1a2436,stroke:#4c5f80,color:#d5e0f0
-    style E fill:#1c2f22,stroke:#3f7f52,color:#c5f0d5
-```
+<div align="center">
+  <img src="docs/flow.svg" alt="工作流：录制或导入 → 反编译 → 编排 → 绑键 → 执行" width="100%">
+</div>
 
 ---
 
