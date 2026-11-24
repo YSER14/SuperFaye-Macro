@@ -1,0 +1,45 @@
+# 本机宏、截图模板、录制与软件状态
+/宏/
+/录制宏/
+/自动化脚本/
+/图片模板/
+/输出/
+/output/
+/appdata/
+/logs/
+/webui_*.json
+*.auto.json
+*.log
+
+# 本机凭据和配置
+.env
+.env.*
+*.pem
+*.key
+*.pfx
+*.p12
+*.kdbx
+
+# 本机安装的第三方驱动
+/Interception/
+*.dll
+*.exe
+*.sys
+*.lib
+*.msi
+*.lnk
+
+# Python 和开发临时文件
+/.venv/
+/venv/
+__pycache__/
+*.py[cod]
+/.pytest_cache/
+/.playwright-cli/
+/_work/
+/_preview/
+/build/
+/dist/
+*.egg-info/
+*.bak
+*.tmp

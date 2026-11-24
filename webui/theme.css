@@ -1,0 +1,216 @@
+/* ═══════════════════════════════════════════════════════════════════════
+   宏锻控制台 · 设计令牌 —— 移植自本地 XMBC 拼宏编辑器（theme.css）
+   三套主题，一套命名。所有主题发布同名变量：
+     画布:   --background / --foreground
+     表面:   --card / --card-foreground, --popover, --secondary,
+             --muted / --muted-foreground, --accent, --surface-raised
+     动作:   --primary / --primary-foreground, --destructive, --ring
+     结构:   --border / --input / --overlay / --shadow-raised
+     状态:   --success / --warning / --info (+ -surface 变体)
+   兼容别名：旧 styles.css 使用的 --bg/--text/--muted/--line/--accent/
+   --danger/--warn 全部指向新令牌，一处换主题，全站生效。
+   ═══════════════════════════════════════════════════════════════════════ */
+
+/* 纸质 Cream —— 暖白画布 + 陶土橙主色（默认） */
+:root {
+  color-scheme: light;
+  --background: #fdfcf9;
+  --foreground: #1c1816;
+  --card: #ffffff;
+  --card-foreground: #1c1816;
+  --popover: #ffffff;
+  --popover-foreground: #1c1816;
+  --primary: #b0501e;
+  --primary-foreground: #ffffff;
+  --secondary: #f5f2ea;
+  --secondary-foreground: #1c1816;
+  --muted: #f1ede2;
+  --muted-foreground: #6d645a;
+  --accent: #ece7d8;
+  --accent-foreground: #1c1816;
+  --destructive: #c53a2c;
+  --destructive-foreground: #ffffff;
+  --border: #e6decc;
+  --input: #e6decc;
+  --ring: #b0501e;
+  --overlay: rgba(28, 24, 22, 0.42);
+  --success: #237a4b;
+  --success-surface: #ecf8f0;
+  --warning: #a15c00;
+  --warning-surface: #fff7df;
+  --info: #2563eb;
+  --info-surface: #eff6ff;
+  --surface-raised: #ffffff;
+  --shadow-raised: 0 16px 40px rgba(69, 49, 31, 0.12);
+
+  /* ── 旧变量别名（兼容既有引用） ── */
+  --bg: var(--background);
+  --bg-soft: var(--secondary);
+  --card-light: var(--surface-raised);
+  --text: var(--foreground);
+  --muted: var(--muted-foreground);
+  --line: var(--border);
+  --accent-strong: var(--primary);
+  --danger: var(--destructive);
+  --warn: var(--warning);
+  --shadow: var(--shadow-raised);
+}
+
+/* 简约 Snow —— 纯白中性画布 + 蓝主色 */
+html[data-theme="snow"] {
+  color-scheme: light;
+  --background: #ffffff;
+  --foreground: #0d0d0d;
+  --card: #ffffff;
+  --card-foreground: #0d0d0d;
+  --popover: #ffffff;
+  --popover-foreground: #0d0d0d;
+  --primary: #2563eb;
+  --primary-foreground: #ffffff;
+  --secondary: #f7f7f7;
+  --secondary-foreground: #0d0d0d;
+  --muted: #f2f2f2;
+  --muted-foreground: #6e6e6e;
+  --accent: #ececec;
+  --accent-foreground: #0d0d0d;
+  --destructive: #d92d20;
+  --destructive-foreground: #ffffff;
+  --border: #e5e5e5;
+  --input: #e5e5e5;
+  --ring: #2563eb;
+  --overlay: rgba(0, 0, 0, 0.4);
+  --success: #16794b;
+  --success-surface: #ecfdf3;
+  --warning: #a15c00;
+  --warning-surface: #fffaeb;
+  --info: #2563eb;
+  --info-surface: #eff6ff;
+  --surface-raised: #ffffff;
+  --shadow-raised: 0 16px 40px rgba(13, 13, 13, 0.12);
+}
+
+/* 纯黑 Black —— OLED 全黑 + 白主色，无任何色染（Vercel/Linear 黑） */
+html[data-theme="black"] {
+  color-scheme: dark;
+  --background: #000000;
+  --foreground: #f5f5f5;
+  --card: #0a0a0a;
+  --card-foreground: #f5f5f5;
+  --popover: #111111;
+  --popover-foreground: #f5f5f5;
+  --primary: #ffffff;
+  --primary-foreground: #000000;
+  --secondary: #141414;
+  --secondary-foreground: #e8e8e8;
+  --muted: #1a1a1a;
+  --muted-foreground: #9d9d9d;
+  --accent: #222222;
+  --accent-foreground: #ffffff;
+  --destructive: #e5484d;
+  --destructive-foreground: #ffffff;
+  --border: #262626;
+  --input: #262626;
+  --ring: #ffffff;
+  --overlay: rgba(0, 0, 0, 0.7);
+  --success: #5fd08a;
+  --success-surface: #0e2a1c;
+  --warning: #f2b84b;
+  --warning-surface: #2e2412;
+  --info: #7ba7ff;
+  --info-surface: #101c33;
+  --surface-raised: #141414;
+  --shadow-raised: 0 16px 44px rgba(0, 0, 0, 0.55);
+}
+
+/* ── 字体与动效节奏（与拼宏编辑器同一套） ─────────────────────────── */
+:root {
+  --font-sans: "Segoe UI Variable Text", "Segoe UI", Inter, "PingFang SC",
+    "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans SC", system-ui, sans-serif;
+  --font-mono: ui-monospace, "Cascadia Mono", "Cascadia Code", Consolas,
+    "JetBrains Mono", "Noto Sans Mono", monospace;
+  --motion-fast: 120ms;
+  --motion-base: 180ms;
+  --motion-slow: 240ms;
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-pop: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  --radius-panel: 16px;
+  --radius-control: 10px;
+}
+
+* { box-sizing: border-box; }
+
+:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+/* ── 主题色点组（右上角三圆点，拼宏编辑器同款） ─────────────────── */
+.swatches {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--secondary);
+}
+
+.sw {
+  width: 20px;
+  height: 20px;
+  min-height: 0;
+  padding: 0;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: radial-gradient(circle at 50% 50%, var(--sw-accent) 0 3px, var(--sw-canvas) 3.5px);
+  cursor: pointer;
+  transition: box-shadow var(--motion-base) var(--ease-standard),
+    transform var(--motion-base) var(--ease-spring),
+    background-color var(--motion-fast) var(--ease-standard);
+}
+.sw:hover {
+  transform: scale(1.14);
+}
+.sw[aria-pressed="true"] {
+  box-shadow: 0 0 0 2px var(--background), 0 0 0 4px var(--ring);
+}
+.sw[data-theme-set="cream"] { --sw-canvas: #fdfcf9; --sw-accent: #b0501e; }
+.sw[data-theme-set="snow"]  { --sw-canvas: #ffffff; --sw-accent: #2563eb; }
+.sw[data-theme-set="black"] { --sw-canvas: #000000; --sw-accent: #ffffff; }
+
+/* ── 主题切换时整套配色交叉淡入，不硬切 ─────────────────────────── */
+html.theme-anim,
+html.theme-anim body,
+html.theme-anim .sidebar,
+html.theme-anim .topbar,
+html.theme-anim .card,
+html.theme-anim .pill,
+html.theme-anim .list,
+html.theme-anim .list li,
+html.theme-anim button,
+html.theme-anim input,
+html.theme-anim select,
+html.theme-anim textarea,
+html.theme-anim .toast,
+html.theme-anim .console,
+html.theme-anim .param-group,
+html.theme-anim .param-item,
+html.theme-anim .switch-slider,
+html.theme-anim .swatches {
+  transition: background-color var(--motion-slow) ease,
+    color var(--motion-slow) ease,
+    border-color var(--motion-slow) ease,
+    box-shadow var(--motion-slow) ease !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* 防主题闪烁：head 内联脚本已提前设 data-theme，无需额外处理 */
