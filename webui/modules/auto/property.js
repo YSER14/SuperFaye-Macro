@@ -32,10 +32,10 @@
             var html = '';
 
             html += '<div class="prop-node-header">' +
-                '<div class="prop-node-color" style="background:' + (def ? def.color : '#888') + '"></div>' +
+                '<div class="prop-node-color" style="background:' + _propEscapeHtml(def ? def.color : '#888') + '"></div>' +
                 '<div>' +
                   '<div class="prop-node-title">' + _propEscapeHtml(node.title || defName) + '</div>' +
-                  '<div class="prop-node-type" title="节点类型：' + _propEscapeHtml(defKeyText) + '">' + _propEscapeHtml(defName) + ' #' + node.id + '</div>' +
+                  '<div class="prop-node-type" title="节点类型：' + _propEscapeHtml(defKeyText) + '">' + _propEscapeHtml(defName) + ' #' + _propEscapeHtml(node.id) + '</div>' +
                 '</div>' +
               '</div>';
 
@@ -65,7 +65,7 @@
                     '<div class="prop-group-body">' +
                       '<div class="prop-preview" id="preview-area"><span>点击预览查看结果</span></div>' +
                       '<div class="prop-btn-row">' +
-                        '<button class="prop-btn accent-outline" onclick="window._autoEditor.runPreview(\'' + defKey + '\', ' + node.id + ')">' +
+                        '<button class="prop-btn accent-outline" data-prop-action="preview" data-defkey="' + _propEscapeHtml(defKey) + '" data-nid="' + _propEscapeHtml(node.id) + '">' +
                           '<i class="fa-solid fa-bolt"></i> 预览' +
                         '</button>' +
                       '</div>' +
@@ -78,7 +78,7 @@
                     '<div class="prop-group-header"><i class="fa-solid fa-chevron-down arrow"></i> 动作编辑</div>' +
                     '<div class="prop-group-body">' +
                       '<div class="prop-btn-row">' +
-                        '<button class="prop-btn accent-outline" onclick="window.AutomationBlockEditor.open(AutomationCore.lgGraphObj.getNodeById(' + node.id + '))">' +
+                        '<button class="prop-btn accent-outline" data-prop-action="edit-block" data-nid="' + _propEscapeHtml(node.id) + '">' +
                           '<i class="fa-solid fa-pen"></i> 编辑动作块' +
                         '</button>' +
                       '</div>' +
@@ -89,6 +89,35 @@
             container.innerHTML = html;
 
             this._bindEvents(container, node, schema);
+            var self = this;
+            container.querySelectorAll('[data-prop-action]').forEach(function(btn) {
+                btn.addEventListener('click', function() {
+                    var action = this.dataset.propAction;
+                    var rawId = this.dataset.nid;
+                    var parsedId = (!isNaN(Number(rawId)) && String(Number(rawId)) === String(rawId)) ? Number(rawId) : rawId;
+                    var keyAttr = this.dataset.key || '';
+                    if (action === 'preview' && window._autoEditor) {
+                        window._autoEditor.runPreview(this.dataset.defkey || '', parsedId);
+                    } else if (action === 'edit-block' && window.AutomationBlockEditor && AutomationCore.lgGraphObj) {
+                        window.AutomationBlockEditor.open(AutomationCore.lgGraphObj.getNodeById(parsedId));
+                    } else if (action === 'toggle-var') {
+                        self._toggleVarSelector(this, parsedId, keyAttr, this.dataset.vartype || 'string');
+                    } else if (action === 'coord-pick' && window.AutomationTools) {
+                        window.AutomationTools.startCoordPick(parsedId, keyAttr);
+                    } else if (action === 'browse-window' && window._autoEditor) {
+                        window._autoEditor.browseWindowList(parsedId, keyAttr);
+                    } else if (action === 'region-pick' && window.AutomationTools) {
+                        window.AutomationTools.startRegionPick(parsedId, keyAttr);
+                    } else if (action === 'browse-path' && window._autoEditor) {
+                        if (this.dataset.btype === 'template') window._autoEditor.browseTemplatePath(parsedId);
+                        else window._autoEditor.browseMacroPath(parsedId);
+                    } else if (action === 'add-var-item') {
+                        self._addVarListItem(this, parsedId, keyAttr);
+                    } else if (action === 'remove-var-item') {
+                        self._removeVarListItem(this, parsedId, keyAttr);
+                    }
+                });
+            });
 
             container.querySelectorAll('.prop-group-header').forEach(function(h) {
                 h.addEventListener('click', function() { this.classList.toggle('collapsed'); });
@@ -107,7 +136,7 @@
                 '<div class="prop-node-color" style="background:' + _propEscapeHtml(an.color || '#fbbf24') + '"></div>' +
                 '<div>' +
                   '<div class="prop-node-title">注释</div>' +
-                  '<div class="prop-node-type">#' + an.id + '</div>' +
+                  '<div class="prop-node-type">#' + _propEscapeHtml(an.id) + '</div>' +
                 '</div>' +
               '</div>';
 
@@ -154,9 +183,17 @@
             html += '<div class="prop-field"><label class="prop-field-label">Y</label><input type="number" data-key="posY" value="' + Math.round(an.pos[1]) + '" style="width:100%"></div>';
             html += '</div></div>';
 
-            html += '<div style="padding:10px 14px 14px"><button class="prop-btn outline" style="width:100%;justify-content:center" onclick="if(window.AutomationCore)window.AutomationCore.removeAnnotation(' + an.id + ');if(window.AutomationProperty)AutomationProperty.render(null);"><i class="fa-solid fa-trash-can"></i> 删除注释</button></div>';
+            html += '<div style="padding:10px 14px 14px"><button class="prop-btn outline" data-prop-action="remove-annotation" style="width:100%;justify-content:center"><i class="fa-solid fa-trash-can"></i> 删除注释</button></div>';
 
             container.innerHTML = html;
+
+            var rmAnBtn = container.querySelector('[data-prop-action="remove-annotation"]');
+            if (rmAnBtn) {
+                rmAnBtn.addEventListener('click', function() {
+                    if (window.AutomationCore) window.AutomationCore.removeAnnotation(an.id);
+                    if (window.AutomationProperty) AutomationProperty.render(null);
+                });
+            }
 
             container.querySelectorAll('.prop-group-header').forEach(function(h) {
                 h.addEventListener('click', function() { this.classList.toggle('collapsed'); });
@@ -222,7 +259,7 @@
                 '<div class="prop-node-color" style="background:' + _propEscapeHtml(gp.color || '#3b82f6') + '"></div>' +
                 '<div>' +
                   '<div class="prop-node-title">分组</div>' +
-                  '<div class="prop-node-type">#' + gp.id + '</div>' +
+                  '<div class="prop-node-type">#' + _propEscapeHtml(gp.id) + '</div>' +
                 '</div>' +
               '</div>';
 
@@ -267,9 +304,17 @@
             html += '<div class="prop-field"><label class="prop-field-label">高度</label><input type="number" data-key="sizeH" value="' + Math.round(gp.size[1]) + '" style="width:100%"></div>';
             html += '</div></div>';
 
-            html += '<div style="padding:10px 14px 14px"><button class="prop-btn outline" style="width:100%;justify-content:center" onclick="if(window.AutomationCore)window.AutomationCore.removeGroup(' + gp.id + ');if(window.AutomationProperty)AutomationProperty.render(null);"><i class="fa-solid fa-trash-can"></i> 删除分组</button></div>';
+            html += '<div style="padding:10px 14px 14px"><button class="prop-btn outline" data-prop-action="remove-group" style="width:100%;justify-content:center"><i class="fa-solid fa-trash-can"></i> 删除分组</button></div>';
 
             container.innerHTML = html;
+
+            var rmGpBtn = container.querySelector('[data-prop-action="remove-group"]');
+            if (rmGpBtn) {
+                rmGpBtn.addEventListener('click', function() {
+                    if (window.AutomationCore) window.AutomationCore.removeGroup(gp.id);
+                    if (window.AutomationProperty) AutomationProperty.render(null);
+                });
+            }
 
             container.querySelectorAll('.prop-group-header').forEach(function(h) {
                 h.addEventListener('click', function() { this.classList.toggle('collapsed'); });
@@ -415,16 +460,16 @@
             var hasVarBtn = schema.varRef;
             if (hasPickBtn || hasVarBtn) {
                 html += '<div style="display:flex;gap:4px">' +
-                  '<input type="text" data-key="' + key + '" data-type="number" data-raw-value="' + (val !== null && val !== undefined ? val : '') + '" value="' + displayVal + '" step="' + step + '" placeholder="' + placeholder + '" style="flex:1" class="' + inputClass + '">';
+                  '<input type="text" data-key="' + _propEscapeHtml(key) + '" data-type="number" data-raw-value="' + _propEscapeHtml(val !== null && val !== undefined ? val : '') + '" value="' + _propEscapeHtml(displayVal) + '" step="' + _propEscapeHtml(step) + '" placeholder="' + _propEscapeHtml(placeholder) + '" style="flex:1" class="' + _propEscapeHtml(inputClass) + '">';
                 if (hasVarBtn) {
-                    html += '<button class="prop-btn outline var-ref-btn" data-key="' + key + '" data-vartype="number" onclick="window.AutomationProperty._toggleVarSelector(this,' + node.id + ',\'' + key + '\',\'number\')" style="flex-shrink:0;padding:6px 16px" title="选择变量"><i class="fa-solid fa-dollar-sign"></i></button>';
+                    html += '<button class="prop-btn outline var-ref-btn" data-prop-action="toggle-var" data-nid="' + _propEscapeHtml(node.id) + '" data-key="' + _propEscapeHtml(key) + '" data-vartype="number" style="flex-shrink:0;padding:6px 16px" title="选择变量"><i class="fa-solid fa-dollar-sign"></i></button>';
                 }
                 if (hasPickBtn) {
-                    html += '<button class="prop-btn outline" onclick="window.AutomationTools.startCoordPick(' + node.id + ',\'' + key + '\')" style="flex-shrink:0;padding:6px 16px" title="拾取坐标"><i class="fa-solid fa-crosshairs"></i></button>';
+                    html += '<button class="prop-btn outline" data-prop-action="coord-pick" data-nid="' + _propEscapeHtml(node.id) + '" data-key="' + _propEscapeHtml(key) + '" style="flex-shrink:0;padding:6px 16px" title="拾取坐标"><i class="fa-solid fa-crosshairs"></i></button>';
                 }
                 html += '</div>';
             } else {
-                html += '<input type="text" data-key="' + key + '" data-type="number" data-raw-value="' + (val !== null && val !== undefined ? val : '') + '" value="' + displayVal + '" step="' + step + '" placeholder="' + placeholder + '" class="' + inputClass + '">';
+                html += '<input type="text" data-key="' + _propEscapeHtml(key) + '" data-type="number" data-raw-value="' + _propEscapeHtml(val !== null && val !== undefined ? val : '') + '" value="' + _propEscapeHtml(displayVal) + '" step="' + _propEscapeHtml(step) + '" placeholder="' + _propEscapeHtml(placeholder) + '" class="' + _propEscapeHtml(inputClass) + '">';
             }
             html += desc + '</div>';
             return html;
@@ -440,16 +485,16 @@
                 '<label class="prop-field-label">' + _propFieldLabel(schema, key) + ' ' + varBadge + '</label>';
             if (isHwndVar || hasVarBtn) {
                 html += '<div style="display:flex;gap:4px">' +
-                  '<input type="text" data-key="' + key + '" data-type="string" data-raw-value="' + (val || '') + '" value="' + displayVal + '" placeholder="' + (schema.placeholder || '') + '" style="flex:1" class="' + inputClass + '">';
+                  '<input type="text" data-key="' + _propEscapeHtml(key) + '" data-type="string" data-raw-value="' + _propEscapeHtml(val || '') + '" value="' + _propEscapeHtml(displayVal) + '" placeholder="' + _propEscapeHtml(schema.placeholder || '') + '" style="flex:1" class="' + _propEscapeHtml(inputClass) + '">';
                 if (hasVarBtn) {
-                    html += '<button class="prop-btn outline var-ref-btn" data-key="' + key + '" data-vartype="string" onclick="window.AutomationProperty._toggleVarSelector(this,' + node.id + ',\'' + key + '\',\'string\')" style="flex-shrink:0;padding:6px 16px" title="选择变量"><i class="fa-solid fa-dollar-sign"></i></button>';
+                    html += '<button class="prop-btn outline var-ref-btn" data-prop-action="toggle-var" data-nid="' + _propEscapeHtml(node.id) + '" data-key="' + _propEscapeHtml(key) + '" data-vartype="string" style="flex-shrink:0;padding:6px 16px" title="选择变量"><i class="fa-solid fa-dollar-sign"></i></button>';
                 }
                 if (isHwndVar) {
-                    html += '<button class="prop-btn outline" onclick="window._autoEditor.browseWindowList(' + node.id + ',\'' + key + '\')" style="flex-shrink:0;padding:6px 16px" title="选择窗口"><i class="fa-solid fa-window-restore"></i></button>';
+                    html += '<button class="prop-btn outline" data-prop-action="browse-window" data-nid="' + _propEscapeHtml(node.id) + '" data-key="' + _propEscapeHtml(key) + '" style="flex-shrink:0;padding:6px 16px" title="选择窗口"><i class="fa-solid fa-window-restore"></i></button>';
                 }
                 html += '</div>';
             } else {
-                html += '<input type="text" data-key="' + key + '" data-type="string" data-raw-value="' + (val || '') + '" value="' + displayVal + '" placeholder="' + (schema.placeholder || '') + '" class="' + inputClass + '">';
+                html += '<input type="text" data-key="' + _propEscapeHtml(key) + '" data-type="string" data-raw-value="' + _propEscapeHtml(val || '') + '" value="' + _propEscapeHtml(displayVal) + '" placeholder="' + _propEscapeHtml(schema.placeholder || '') + '" class="' + _propEscapeHtml(inputClass) + '">';
             }
             html += '</div>';
             return html;
@@ -458,19 +503,20 @@
         _renderBoolField: function(key, schema, val) {
             return '<div class="prop-field">' +
                 '<div class="checkbox-row">' +
-                  '<input type="checkbox" data-key="' + key + '" data-type="bool" id="cb_' + key + '"' + (val ? ' checked' : '') + '>' +
-                  '<label for="cb_' + key + '">' + _propFieldLabel(schema, key) + '</label>' +
+                  '<input type="checkbox" data-key="' + _propEscapeHtml(key) + '" data-type="bool" id="cb_' + _propEscapeHtml(key) + '"' + (val ? ' checked' : '') + '>' +
+                  '<label for="cb_' + _propEscapeHtml(key) + '">' + _propFieldLabel(schema, key) + '</label>' +
                 '</div>' +
               '</div>';
         },
 
         _renderColorField: function(key, schema, val, varBadge) {
-            var colorVal = val || '#FF0000';
+            var colorVal = /^#[0-9a-fA-F]{3,8}$/.test(String(val || '')) ? String(val) : '#FF0000';
+            var textVal = (val !== null && val !== undefined && val !== '') ? String(val) : '#FF0000';
             return '<div class="prop-field">' +
                 '<label class="prop-field-label">' + _propFieldLabel(schema, key) + ' ' + varBadge + '</label>' +
                 '<div style="display:flex;gap:6px;align-items:center">' +
-                  '<input type="color" data-key="' + key + '" data-type="color" value="' + colorVal + '" style="width:36px;height:28px;padding:1px;cursor:pointer;border:1px solid var(--border);border-radius:var(--rs);background:var(--bg-surface)">' +
-                  '<input type="text" data-key="' + key + '" data-type="color-text" value="' + colorVal + '" style="flex:1" placeholder="#RRGGBB">' +
+                  '<input type="color" data-key="' + _propEscapeHtml(key) + '" data-type="color" value="' + _propEscapeHtml(colorVal) + '" style="width:36px;height:28px;padding:1px;cursor:pointer;border:1px solid var(--border);border-radius:var(--rs);background:var(--bg-surface)">' +
+                  '<input type="text" data-key="' + _propEscapeHtml(key) + '" data-type="color-text" value="' + _propEscapeHtml(textVal) + '" style="flex:1" placeholder="#RRGGBB">' +
                 '</div>' +
               '</div>';
         },
@@ -486,14 +532,14 @@
             for (var i = 0; i < 4; i++) {
                 html += '<div class="region-cell">' +
                     '<label>' + labels[i] + '</label>' +
-                    '<input type="number" data-key="' + key + '" data-type="region" data-index="' + i + '" value="' + (vals[i] || 0) + '" step="' + step + '">' +
+                    '<input type="number" data-key="' + _propEscapeHtml(key) + '" data-type="region" data-index="' + i + '" value="' + _propEscapeHtml(vals[i] || 0) + '" step="' + step + '">' +
                   '</div>';
             }
             var isVarRefVal = typeof val === 'string' && val.indexOf('${') === 0 && val.charAt(val.length - 1) === '}';
             html += '</div>';
             if (!isVarRefVal) {
                 html += '<div class="prop-btn-row" style="margin-top:6px">' +
-                    '<button class="prop-btn outline" onclick="window.AutomationTools.startRegionPick(' + node.id + ',\'' + key + '\')">' +
+                    '<button class="prop-btn outline" data-prop-action="region-pick" data-nid="' + _propEscapeHtml(node.id) + '" data-key="' + _propEscapeHtml(key) + '">' +
                       '<i class="fa-solid fa-crop-simple"></i> 框选区域' +
                     '</button>' +
                   '</div>';
@@ -504,13 +550,12 @@
 
         _renderPathField: function(key, schema, val, varBadge, node) {
             var browseType = schema.browseType || 'macro';
-            var browseFn = browseType === 'template' ? 'window._autoEditor.browseTemplatePath' : 'window._autoEditor.browseMacroPath';
             var browseIcon = browseType === 'template' ? 'fa-solid fa-folder-open' : 'fa-solid fa-list';
             return '<div class="prop-field">' +
                 '<label class="prop-field-label">' + _propFieldLabel(schema, key) + ' ' + varBadge + '</label>' +
                 '<div style="display:flex;gap:4px">' +
-                  '<input type="text" data-key="' + key + '" data-type="string" value="' + (val || '') + '" placeholder="' + (schema.placeholder || '') + '" style="flex:1">' +
-                  '<button class="prop-btn outline" onclick="' + browseFn + '(' + node.id + ')" style="flex-shrink:0;padding:6px 16px"><i class="' + browseIcon + '"></i></button>' +
+                  '<input type="text" data-key="' + _propEscapeHtml(key) + '" data-type="string" value="' + _propEscapeHtml(val || '') + '" placeholder="' + _propEscapeHtml(schema.placeholder || '') + '" style="flex:1">' +
+                  '<button class="prop-btn outline" data-prop-action="browse-path" data-btype="' + _propEscapeHtml(browseType) + '" data-nid="' + _propEscapeHtml(node.id) + '" style="flex-shrink:0;padding:6px 16px"><i class="' + browseIcon + '"></i></button>' +
                 '</div>' +
               '</div>';
         },
@@ -519,21 +564,21 @@
             var items = [];
             try { items = JSON.parse(val || '[]'); } catch(e) { items = []; }
             if (!Array.isArray(items)) items = [];
-            var html = '<div class="prop-field var-list-field" data-key="' + key + '">' +
+            var html = '<div class="prop-field var-list-field" data-key="' + _propEscapeHtml(key) + '">' +
                 '<label class="prop-field-label">' + _propFieldLabel(schema, key) +
-                ' <button class="prop-btn outline" style="padding:2px 8px;font-size:11px" onclick="window.AutomationProperty._addVarListItem(this,' + node.id + ',\'' + key + '\')"><i class="fa-solid fa-plus"></i> 添加</button></label>';
+                ' <button class="prop-btn outline" style="padding:2px 8px;font-size:11px" data-prop-action="add-var-item" data-nid="' + _propEscapeHtml(node.id) + '" data-key="' + _propEscapeHtml(key) + '"><i class="fa-solid fa-plus"></i> 添加</button></label>';
             html += '<div class="var-list-items">';
             for (var i = 0; i < items.length; i++) {
                 var item = items[i];
                 html += '<div class="var-list-row" data-index="' + i + '">' +
-                  '<input type="text" data-subkey="name" value="' + (item.name || '') + '" placeholder="变量名" style="width:30%">' +
-                  '<input type="text" data-subkey="value" value="' + (item.value || '') + '" placeholder="值/${var}" style="width:35%">' +
+                  '<input type="text" data-subkey="name" value="' + _propEscapeHtml(item.name || '') + '" placeholder="变量名" style="width:30%">' +
+                  '<input type="text" data-subkey="value" value="' + _propEscapeHtml(item.value || '') + '" placeholder="值/${var}" style="width:35%">' +
                   '<select data-subkey="type" style="width:20%">' +
                     '<option value="string"' + (item.type === 'string' ? ' selected' : '') + '>文本</option>' +
                     '<option value="number"' + (item.type === 'number' ? ' selected' : '') + '>数字</option>' +
                     '<option value="boolean"' + (item.type === 'boolean' ? ' selected' : '') + '>布尔</option>' +
                   '</select>' +
-                  '<button class="prop-btn outline" style="padding:2px 6px" onclick="window.AutomationProperty._removeVarListItem(this,' + node.id + ',\'' + key + '\')"><i class="fa-solid fa-xmark"></i></button>' +
+                  '<button class="prop-btn outline" style="padding:2px 6px" data-prop-action="remove-var-item" data-nid="' + _propEscapeHtml(node.id) + '" data-key="' + _propEscapeHtml(key) + '"><i class="fa-solid fa-xmark"></i></button>' +
                 '</div>';
             }
             html += '</div></div>';
@@ -587,12 +632,12 @@
             var html = '<div style="padding:4px 12px;font-size:11px;color:var(--txt3,#94a3b8);font-weight:600">选择变量</div>';
             for (var nodeLabel in structuredVars) {
                 var vars = structuredVars[nodeLabel];
-                html += '<div style="padding:4px 12px;font-size:11px;color:var(--txt2,#cbd5e1);font-weight:600;border-bottom:1px solid var(--border,#334155)">' + nodeLabel + '</div>';
+                html += '<div style="padding:4px 12px;font-size:11px;color:var(--txt2,#cbd5e1);font-weight:600;border-bottom:1px solid var(--border,#334155)">' + _propEscapeHtml(nodeLabel) + '</div>';
                 for (var j = 0; j < vars.length; j++) {
                     var v = vars[j];
-                    html += '<div class="var-selector-item" data-varref="' + v.ref + '" style="padding:6px 12px 6px 24px;cursor:pointer;font-size:12px;color:var(--txt1,#f1f5f9);display:flex;justify-content:space-between">' +
-                      '<span>' + v.name + '</span>' +
-                      '<span style="color:var(--txt3,#94a3b8);font-size:10px">' + v.typeLabel + '</span></div>';
+                    html += '<div class="var-selector-item" data-varref="' + _propEscapeHtml(v.ref) + '" style="padding:6px 12px 6px 24px;cursor:pointer;font-size:12px;color:var(--txt1,#f1f5f9);display:flex;justify-content:space-between">' +
+                      '<span>' + _propEscapeHtml(v.name) + '</span>' +
+                      '<span style="color:var(--txt3,#94a3b8);font-size:10px">' + _propEscapeHtml(v.typeLabel) + '</span></div>';
                 }
             }
             popup.innerHTML = html;

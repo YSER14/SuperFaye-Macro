@@ -197,10 +197,12 @@ var _nodes = {};
         }
         if (schema.type === 'number') {
             var step = (schema.coordRef) ? '0.01' : '1';
-            return '<input type="number" class="nf nf-num" data-nid="' + nid + '" data-key="' + k + '" value="' + _escapeHtml(val ?? schema.default ?? 0) + '" step="' + step + '">';
+            var numVal = (val !== null && val !== undefined ? val : (schema.default || 0));
+            return '<input type="number" class="nf nf-num" data-nid="' + _escapeHtml(nid) + '" data-key="' + _escapeHtml(k) + '" value="' + _escapeHtml(numVal) + '" step="' + _escapeHtml(step) + '">';
         }
         if (schema.type === 'color') {
-            return '<input type="color" class="nf nf-col" data-nid="' + nid + '" data-key="' + k + '" value="' + _escapeHtml(val || '#FF0000') + '">';
+            var colVal = /^#[0-9a-fA-F]{3,8}$/.test(String(val || '')) ? String(val) : '#FF0000';
+            return '<input type="color" class="nf nf-col" data-nid="' + _escapeHtml(nid) + '" data-key="' + _escapeHtml(k) + '" value="' + _escapeHtml(colVal) + '">';
         }
         if (schema.type === 'region') {
             var rv = Array.isArray(val) ? val.join(', ') : (val || '');
@@ -236,7 +238,7 @@ var _nodes = {};
 
         var h = document.createElement('div');
         h.className = 'nd-h';
-        h.innerHTML = '<i class="ni ' + node._iconClass + '" style="color:' + node._accentColor + '"></i>' +
+        h.innerHTML = '<i class="ni ' + _escapeHtml(node._iconClass) + '" style="color:' + _escapeHtml(node._accentColor) + '"></i>' +
             '<span class="nl">' + _escapeHtml(node._customName || (def ? def.display_name : node.type)) + '</span>' +
             '<div class="nx" data-action="delete"><i class="fa-solid fa-xmark"></i></div>';
         el.appendChild(h);
@@ -317,9 +319,9 @@ var _nodes = {};
                 var ptType = inp.type === 'flow' ? 'flow' : 'data';
                 var ptR = document.createElement('div');
                 ptR.className = 'pt-r i';
-                ptR.innerHTML = '<div class="pt ' + ptType + '" data-n="' + node.id + '" data-p="' + inp._portKey + '" data-d="i" data-pt="' + inp.type + '">' +
+                ptR.innerHTML = '<div class="pt ' + _escapeHtml(ptType) + '" data-n="' + _escapeHtml(node.id) + '" data-p="' + _escapeHtml(inp._portKey) + '" data-d="i" data-pt="' + _escapeHtml(inp.type) + '">' +
                     '<div class="pd' + (con ? ' con' : '') + '"></div>' +
-                    '<span>' + inp.name + '</span></div>';
+                    '<span>' + _escapeHtml(inp.name) + '</span></div>';
                 piS.appendChild(ptR);
                 rowEl.appendChild(piS);
             } else if (ri >= paramStartRow && ri < paramStartRow + sKeys.length) {
@@ -360,8 +362,8 @@ var _nodes = {};
                 var ptType2 = out.type === 'flow' ? 'flow' : 'data';
                 var ptR2 = document.createElement('div');
                 ptR2.className = 'pt-r o';
-                ptR2.innerHTML = '<div class="pt ' + ptType2 + '" data-n="' + node.id + '" data-p="' + out._portKey + '" data-d="o" data-pt="' + out.type + '">' +
-                    '<span>' + out.name + '</span>' +
+                ptR2.innerHTML = '<div class="pt ' + _escapeHtml(ptType2) + '" data-n="' + _escapeHtml(node.id) + '" data-p="' + _escapeHtml(out._portKey) + '" data-d="o" data-pt="' + _escapeHtml(out.type) + '">' +
+                    '<span>' + _escapeHtml(out.name) + '</span>' +
                     '<div class="pd' + (con2 ? ' con' : '') + '"></div></div>';
                 poS.appendChild(ptR2);
                 rowEl.appendChild(poS);
@@ -1330,8 +1332,13 @@ var _nodes = {};
         var ctx = mmCv.getContext('2d');
         ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
         ctx.clearRect(0, 0, w, h);
-        ctx.fillStyle = 'rgba(10,14,20,0.92)';
+        var cs = getComputedStyle(document.documentElement);
+        var cardBg = cs.getPropertyValue('--card').trim() || '#12161f';
+        var fgColor = cs.getPropertyValue('--muted-foreground').trim() || '#8c96aa';
+        ctx.fillStyle = cardBg;
+        ctx.globalAlpha = 0.92;
         ctx.fillRect(0, 0, w, h);
+        ctx.globalAlpha = 1;
 
         var hasContent = _nodeList.length > 0 || _annotations.length > 0 || _groups.length > 0;
         if (!hasContent) { _mmBounds = null; return; }
@@ -1411,9 +1418,11 @@ var _nodes = {};
         var vy = oy + (-_vpOffset.y / _vpScale - minY) * s;
         var vw = viewW * s;
         var vh = viewH * s;
-        ctx.strokeStyle = 'rgba(255,255,255,0.6)';
+        ctx.strokeStyle = fgColor;
+        ctx.globalAlpha = 0.7;
         ctx.lineWidth = 1;
         ctx.strokeRect(vx, vy, vw, vh);
+        ctx.globalAlpha = 1;
 
         _mmBounds = { minX: minX, minY: minY, maxX: maxX, maxY: maxY, gw: gw, gh: gh, s: s, ox: ox, oy: oy, w: w, h: h };
     }

@@ -1,11 +1,11 @@
 import { state } from './core/state.js';
-import { q, qa, showToast } from './core/dom.js';
+import { q, showToast } from './core/dom.js';
 import { apiCall } from './core/api.js';
+import { openPromptDialog, openConfirmDialog } from './core/dialog.js';
 import { refreshListenerButtonState, refreshSnapshot } from './dashboard.js';
 import { renderMacroTreeList } from './macro-tree.js';
 import { openImportMacroDialog } from './macro-import.js';
 
-// 触发方式的中文显示（后端存的仍是 normal / pause_resume 这类英文原值）
 const PRESS_MODE_LABELS = {
   normal: '普通（按一次跑一次）',
   pause_resume: '暂停 / 继续切换',
@@ -16,8 +16,6 @@ const PRESS_MODE_LABELS = {
   release_pause: '抬起即暂停',
 };
 
-// 触发键的中文显示（绑定、触发仍用 v / mouse_x1 这些原始键名）
-// 后端实际会写出 caps_lock / num_lock 这种带下划线的名字，两个写法都收
 const TRIGGER_KEY_LABELS = {
   mouse_x1: '鼠标侧键 1',
   mouse_x2: '鼠标侧键 2',
@@ -26,40 +24,39 @@ const TRIGGER_KEY_LABELS = {
   mouse_middle: '鼠标中键',
   mouse_wheel_up: '滚轮向上',
   mouse_wheel_down: '滚轮向下',
-  esc: 'Esc 键',
-  space: '空格键',
-  enter: '回车键',
-  tab: 'Tab 键',
-  shift: 'Shift 键',
-  ctrl: 'Ctrl 键',
-  alt: 'Alt 键',
-  backspace: '退格键',
-  delete: 'Delete 键',
-  insert: 'Insert 键',
-  home: 'Home 键',
-  end: 'End 键',
-  page_up: 'PageUp 键',
-  page_down: 'PageDown 键',
-  up: '↑ 上方向键',
-  down: '↓ 下方向键',
-  left: '← 左方向键',
-  right: '→ 右方向键',
-  capslock: 'CapsLock 键',
-  caps_lock: 'CapsLock 键',
-  numlock: 'NumLock 键',
-  num_lock: 'NumLock 键',
+  esc: 'Esc',
+  space: 'Space',
+  enter: 'Enter',
+  tab: 'Tab',
+  shift: 'Shift',
+  ctrl: 'Ctrl',
+  alt: 'Alt',
+  backspace: 'Backspace',
+  delete: 'Delete',
+  insert: 'Insert',
+  home: 'Home',
+  end: 'End',
+  page_up: 'PageUp',
+  page_down: 'PageDown',
+  up: '↑',
+  down: '↓',
+  left: '←',
+  right: '→',
+  capslock: 'CapsLock',
+  caps_lock: 'CapsLock',
+  numlock: 'NumLock',
+  num_lock: 'NumLock',
 };
 
 const VALID_PRESS_MODES = Object.keys(PRESS_MODE_LABELS);
 
-// 每种触发模式的一句话解释：选到哪个就在下拉框下面提示哪种行为
 const MODE_HINTS = {
   normal: '按一次跑一遍就结束；抬起不做任何事。最常用。',
   pause_resume: '第一次按下启动；运行时再按暂停，暂停后再按继续。',
   hold_pause: '第一次松开时开始执行；运行期间按住暂停，松开继续。',
   stop_restart: '每次按下都先终止旧实例、等它退出，再从第一帧重新开始。',
-  parallel_trigger: '每次按下都新开一份实例，多份同时跑，会越按越多。',
-  release_stop: '按下开始、抬起立刻终止。只有按住不放才跑得下去，轻点一下几乎等于没跑。',
+  parallel_trigger: '每次按下都新开一份实例，多份同时跑。',
+  release_stop: '按下开始、抬起立刻终止（按住运行、松手即停）。',
   release_pause: '按下开始、抬起暂停并保留进度，再按从断点继续。',
 };
 
@@ -72,7 +69,7 @@ function syncBindModeHint() {
 
 function formatTriggerLabel(trigger) {
   const raw = String(trigger ?? '').trim();
-  if (!raw) return '（未设置）';
+  if (!raw) return '未设置';
   return raw
     .split('+')
     .map((part) => {
@@ -80,8 +77,8 @@ function formatTriggerLabel(trigger) {
       if (!name) return '';
       const lower = name.toLowerCase();
       if (TRIGGER_KEY_LABELS[lower]) return TRIGGER_KEY_LABELS[lower];
-      if (/^f([1-9]|1[0-2])$/.test(lower)) return `${lower.toUpperCase()} 键`;
-      if (name.length === 1) return `「${name.toUpperCase()}」键`;
+      if (/^f([1-9]|1[0-2])$/.test(lower)) return lower.toUpperCase();
+      if (name.length === 1) return name.toUpperCase();
       return name;
     })
     .filter(Boolean)
@@ -97,11 +94,25 @@ function syncRuntimeProfileUI() {
   q('#macroSpeedFactor').value = String(state.runtimeProfile.speed_factor ?? 1);
   q('#macroRandomMin').value = String(state.runtimeProfile.random_min_ms ?? 0);
   q('#macroRandomMax').value = String(state.runtimeProfile.random_max_ms ?? 0);
-  q('#btnMacroRandomToggle').textContent = `随机延迟：${state.runtimeProfile.random_enabled ? '开' : '关'}`;
-  q('#btnLowCpuModeToggle').textContent = `CPU 低占用：${state.runtimeProfile.low_cpu_enabled ? '开' : '关'}`;
+
+  const rndBtn = q('#btnMacroRandomToggle');
+  if (rndBtn) {
+    rndBtn.textContent = `随机延迟：${state.runtimeProfile.random_enabled ? '开' : '关'}`;
+    rndBtn.classList.toggle('is-active', Boolean(state.runtimeProfile.random_enabled));
+  }
+
+  const lowCpuBtn = q('#btnLowCpuModeToggle');
+  if (lowCpuBtn) {
+    lowCpuBtn.textContent = `CPU 低占用：${state.runtimeProfile.low_cpu_enabled ? '开' : '关'}`;
+    lowCpuBtn.classList.toggle('is-active', Boolean(state.runtimeProfile.low_cpu_enabled));
+  }
+
   const timePeriodBtn = q('#btnTimePeriodToggle');
-  timePeriodBtn.textContent = `计时器分辨率（1ms）：${state.runtimeProfile.low_cpu_time_period ? '开' : '关'}`;
-  timePeriodBtn.style.display = state.runtimeProfile.low_cpu_enabled ? '' : 'none';
+  if (timePeriodBtn) {
+    timePeriodBtn.textContent = `计时器 1ms：${state.runtimeProfile.low_cpu_time_period ? '开' : '关'}`;
+    timePeriodBtn.classList.toggle('is-active', Boolean(state.runtimeProfile.low_cpu_time_period));
+    timePeriodBtn.style.display = state.runtimeProfile.low_cpu_enabled ? '' : 'none';
+  }
 }
 
 export async function refreshMacroRuntimeProfile() {
@@ -150,7 +161,8 @@ export function renderMacroList() {
     onSelect: (path) => {
       state.selectedMacro = path;
       q('#selectedMacroPath').value = path;
-      q('#simplifyInput').value = path;
+      const simplifyInput = q('#simplifyInput');
+      if (simplifyInput) simplifyInput.value = path;
       renderMacroList();
       if (state.onSelectMacroForEditor) {
         state.onSelectMacroForEditor(path).catch((err) => showToast(err.message));
@@ -160,7 +172,7 @@ export function renderMacroList() {
 }
 
 export async function refreshMacros() {
-  const keyword = q('#macroFilter').value.trim();
+  const keyword = q('#macroFilter')?.value.trim() || '';
   try {
     const data = await apiCall('list_macro_tree', keyword);
     state.macros = data.items || [];
@@ -169,6 +181,9 @@ export async function refreshMacros() {
     state.macros = [];
     state.macroTree = { name: '宏', path: '宏', folders: [], files: [] };
   }
+
+  const countBadge = q('#macroCountBadge');
+  if (countBadge) countBadge.textContent = String(state.macros.length);
 
   if (state.selectedMacro && !state.macros.some((m) => m.path === state.selectedMacro)) {
     state.selectedMacro = null;
@@ -183,7 +198,6 @@ export async function refreshMacros() {
   renderRecordMacroBrowser();
 }
 
-// 最近一次拿到的绑定行：点行回填表单时要能就地重绘高亮，不用等 900ms 轮询
 const bindingRows = new Map();
 let bindingRefreshId = 0;
 let appliedBindingRefreshId = 0;
@@ -193,14 +207,21 @@ function bindingMacroPaths(row) {
   return row.macro_path ? [row.macro_path] : [];
 }
 
-function bindingStatusText(row) {
+function bindingStatusInfo(row) {
   const paused = Number(row.paused_count || 0);
   const running = Number(row.live_count || 0) - paused;
-  if (running > 0 && paused > 0) return `运行中 ${running}｜已暂停 ${paused}`;
-  if (paused > 0) return `已暂停 ${paused}`;
-  if (running > 0) return `运行中 ${running}`;
-  if (Number(row.stopping_count || 0) > 0) return '停止中';
-  return '空闲';
+  if (running > 0 && paused > 0) return { text: `运行 ${running} · 暂停 ${paused}`, tone: 'running' };
+  if (paused > 0) return { text: `已暂停 ${paused}`, tone: 'paused' };
+  if (running > 0) return { text: `运行中 ${running}`, tone: 'running' };
+  if (Number(row.stopping_count || 0) > 0) return { text: '停止中', tone: 'paused' };
+  return { text: '空闲', tone: 'idle' };
+}
+
+function splitMacroPath(path) {
+  const clean = String(path || '').trim();
+  const idx = clean.lastIndexOf('/');
+  if (idx < 0) return { dir: '', name: clean || '未指定宏' };
+  return { dir: clean.slice(0, idx), name: clean.slice(idx + 1) };
 }
 
 function updateBindingSelection() {
@@ -218,16 +239,11 @@ async function refreshSchemeTabsQuietly() {
   }
 }
 
-/** 取消「现有绑定」里的选中态（切换方案后调用）。 */
 export function clearBindingSelection() {
   state.selectedBindingTrigger = null;
   updateBindingSelection();
 }
 
-/**
- * 点「现有绑定」某一行 → 把这条绑定的宏 / 重复次数 / 触发模式回填到上面的表单。
- * 回填只是"载入"，要点「绑定当前宏」才会真正写回后端。
- */
 function applyBindingToForm(row) {
   const macroPaths = bindingMacroPaths(row);
   const firstMacro = macroPaths[0] || '';
@@ -251,7 +267,7 @@ function applyBindingToForm(row) {
   renderMacroList();
   updateBindingSelection();
 
-  const extra = macroPaths.length > 1 ? `（这个键现在绑了 ${macroPaths.length} 个宏，重新绑定只保留当前宏）` : '';
+  const extra = macroPaths.length > 1 ? `（此键绑定了 ${macroPaths.length} 个宏）` : '';
   showToast(`已载入绑定：${formatTriggerLabel(row.trigger)}${extra}`);
 }
 
@@ -259,18 +275,39 @@ function createBindingRow(initialRow) {
   let row = initialRow;
   const trigger = row.trigger;
   let saving = false;
+
   const li = document.createElement('li');
   li.classList.add('binding-row');
   li.dataset.trigger = trigger;
-  li.title = '点一下把这条绑定（宏 / 重复次数 / 触发模式）载入上面的表单';
+  li.title = '点击把该绑定载入下方表单';
 
   const left = document.createElement('div');
   left.className = 'binding-left';
 
+  const keycap = document.createElement('kbd');
+  keycap.className = 'bind-keycap';
+
+  const macroWrap = document.createElement('div');
+  macroWrap.className = 'bind-macro-info';
+  const macroName = document.createElement('div');
+  macroName.className = 'bind-macro-name';
+  const macroSub = document.createElement('div');
+  macroSub.className = 'bind-macro-sub';
+  macroWrap.append(macroName, macroSub);
+
+  const metaWrap = document.createElement('div');
+  metaWrap.className = 'bind-meta-chips';
+  const repeatChip = document.createElement('span');
+  repeatChip.className = 'bind-chip bind-repeat-chip';
+  const statusChip = document.createElement('span');
+  statusChip.className = 'bind-chip bind-status-chip';
+  metaWrap.append(repeatChip, statusChip);
+
+  left.append(keycap, macroWrap, metaWrap);
+
   const actions = document.createElement('div');
   actions.className = 'inline-actions binding-actions';
 
-  // 触发模式：改完立刻保存到这条绑定，不用重新走一遍「选宏 + 绑定」
   const modeSelect = document.createElement('select');
   modeSelect.className = 'binding-mode-select';
   modeSelect.setAttribute('aria-label', `${formatTriggerLabel(trigger)}的触发模式`);
@@ -309,15 +346,18 @@ function createBindingRow(initialRow) {
   });
 
   const btnRun = document.createElement('button');
+  btnRun.type = 'button';
+  btnRun.className = 'mini-btn';
   btnRun.textContent = '试跑';
-  btnRun.title = '立刻试跑一遍宏';
+  btnRun.title = '立即试跑一次';
   btnRun.addEventListener('click', async (e) => {
     e.stopPropagation();
     await runBindingOnce(trigger);
   });
 
   const btnUnbind = document.createElement('button');
-  btnUnbind.className = 'danger';
+  btnUnbind.type = 'button';
+  btnUnbind.className = 'mini-btn danger';
   btnUnbind.textContent = '解绑';
   btnUnbind.addEventListener('click', async (e) => {
     e.stopPropagation();
@@ -328,21 +368,31 @@ function createBindingRow(initialRow) {
     refreshSchemeTabsQuietly();
   });
 
-  actions.appendChild(modeSelect);
-  actions.appendChild(btnRun);
-  actions.appendChild(btnUnbind);
-
+  actions.append(modeSelect, btnRun, btnUnbind);
   li.addEventListener('click', () => applyBindingToForm(row));
-
-  li.appendChild(left);
-  li.appendChild(actions);
+  li.append(left, actions);
 
   function update(nextRow) {
     row = nextRow;
     const mode = VALID_PRESS_MODES.includes(row.running_press_mode) ? row.running_press_mode : 'normal';
-    const macroDisplay = bindingMacroPaths(row).join(' + ') || '（未指定宏）';
-    const label = `触发键 ${formatTriggerLabel(trigger)} → ${macroDisplay}｜重复 ${row.repeat} 次｜${PRESS_MODE_LABELS[mode]}｜${bindingStatusText(row)}`;
-    if (left.textContent !== label) left.textContent = label;
+    const paths = bindingMacroPaths(row);
+    const primary = splitMacroPath(paths[0]);
+    const extraCount = paths.length > 1 ? ` (+${paths.length - 1})` : '';
+
+    const keyLabel = formatTriggerLabel(trigger);
+    if (keycap.textContent !== keyLabel) keycap.textContent = keyLabel;
+    const titleStr = primary.name + extraCount;
+    if (macroName.textContent !== titleStr) macroName.textContent = titleStr;
+    const subStr = primary.dir || '根目录';
+    if (macroSub.textContent !== subStr) macroSub.textContent = subStr;
+
+    const repeatStr = `×${row.repeat || 1}`;
+    if (repeatChip.textContent !== repeatStr) repeatChip.textContent = repeatStr;
+
+    const st = bindingStatusInfo(row);
+    if (statusChip.textContent !== st.text) statusChip.textContent = st.text;
+    statusChip.dataset.tone = st.tone;
+
     li.classList.toggle('running', Number(row.live_count || 0) > Number(row.paused_count || 0));
     if (!saving && modeSelect.value !== mode) modeSelect.value = mode;
     modeSelect.title = MODE_HINTS[mode];
@@ -357,6 +407,10 @@ export async function refreshBindings() {
   if (requestId < appliedBindingRefreshId) return;
   appliedBindingRefreshId = requestId;
   const items = data.items || [];
+
+  const countBadge = q('#bindingCountBadge');
+  if (countBadge) countBadge.textContent = String(items.length);
+
   const triggers = new Set(items.map((row) => row.trigger));
   const list = q('#bindingList');
   for (const [trigger, view] of bindingRows) {
@@ -371,7 +425,7 @@ export async function refreshBindings() {
     if (!list.firstElementChild) {
       const empty = document.createElement('li');
       empty.className = 'binding-empty';
-      empty.textContent = '当前方案还没有绑定：在上面选好宏和触发键，点「绑定当前宏」';
+      empty.textContent = '当前方案暂无绑定：在左侧选宏，再在下方填触发键并点击「绑定当前宏」';
       list.appendChild(empty);
     }
     return;
@@ -386,7 +440,6 @@ export async function refreshBindings() {
       bindingRows.set(row.trigger, view);
     }
     view.update(row);
-    // 轮询只更新状态。原地保留下拉框，避免原生菜单被关闭。
     if (view.element !== nextElement) list.insertBefore(view.element, nextElement);
     nextElement = view.element.nextElementSibling;
   }
@@ -404,37 +457,54 @@ async function runBindingOnce(trigger) {
 }
 
 export function bindMacroActions() {
-  q('#btnRefreshMacros').addEventListener('click', () => {
+  q('#btnRefreshMacros')?.addEventListener('click', () => {
     refreshMacros()
       .then(() => showToast('宏列表已刷新'))
       .catch((err) => showToast(err.message));
   });
 
-  q('#macroFilter').addEventListener('input', () => {
+  q('#macroFilter')?.addEventListener('input', () => {
     refreshMacros().catch((err) => showToast(err.message));
   });
 
-  q('#btnMacroRandomToggle').addEventListener('click', () => {
+  q('#btnGoEditSelectedMacro')?.addEventListener('click', async () => {
+    if (!state.selectedMacro) {
+      showToast('请先在左侧选择一个宏文件');
+      return;
+    }
+    if (state.onSelectMacroForEditor) {
+      await state.onSelectMacroForEditor(state.selectedMacro).catch((err) => showToast(err.message));
+    }
+    await state.switchTab?.('editor');
+  });
+
+  q('#btnMacroRandomToggle')?.addEventListener('click', () => {
     state.runtimeProfile.random_enabled = !state.runtimeProfile.random_enabled;
     syncRuntimeProfileUI();
   });
 
-  q('#btnLowCpuModeToggle').addEventListener('click', () => {
+  q('#btnLowCpuModeToggle')?.addEventListener('click', () => {
     state.runtimeProfile.low_cpu_enabled = !state.runtimeProfile.low_cpu_enabled;
     syncRuntimeProfileUI();
   });
 
-  q('#btnTimePeriodToggle').addEventListener('click', () => {
+  q('#btnTimePeriodToggle')?.addEventListener('click', () => {
     state.runtimeProfile.low_cpu_time_period = !state.runtimeProfile.low_cpu_time_period;
     syncRuntimeProfileUI();
   });
 
-  q('#btnApplyRuntimeProfile').addEventListener('click', () => {
+  q('#btnApplyRuntimeProfile')?.addEventListener('click', () => {
     applyMacroRuntimeProfile().catch((err) => showToast(err.message));
   });
 
-  q('#btnCreateMacro').addEventListener('click', async () => {
-    const name = window.prompt('输入新宏文件名（会创建在「宏/录制宏」目录下）。\n点「确定」按这个名字创建；点「取消」放弃创建。', '新建宏.json');
+  q('#btnCreateMacro')?.addEventListener('click', async () => {
+    const name = await openPromptDialog({
+      title: '新建宏文件',
+      description: '文件将创建在「宏/录制宏」目录下。',
+      label: '文件名',
+      value: '新建宏.json',
+      confirmText: '创建',
+    });
     if (!name) return;
     const res = await apiCall('create_macro', '宏/录制宏', name);
     showToast(`已创建：${res.path}`);
@@ -444,7 +514,7 @@ export function bindMacroActions() {
   q('#btnImportMacroText')?.addEventListener('click', () => {
     openImportMacroDialog({
       title: '导入现成宏 → 新建宏文件',
-      note: '转换后会新建一个 .json 宏文件，导完可以直接在右边填触发键绑定执行。',
+      note: '转换后会新建一个 .json 宏文件，导完可以直接填触发键绑定执行。',
       onRows: async ({ rows }) => {
         const stamp = new Date().toISOString().replace(/[-:]/g, '').replace('T', '_').slice(0, 15);
         const created = await apiCall('create_macro', '宏/导入宏', `导入_${stamp}.json`);
@@ -461,9 +531,15 @@ export function bindMacroActions() {
     });
   });
 
-  q('#btnDeleteMacro').addEventListener('click', async () => {
+  q('#btnDeleteMacro')?.addEventListener('click', async () => {
     if (!state.selectedMacro) return showToast('请先选择一个宏文件');
-    if (!window.confirm(`确认删除宏文件「${state.selectedMacro}」？\n\n点「确定」立即删除，删除后不可恢复；\n点「取消」保留该文件。`)) return;
+    const ok = await openConfirmDialog({
+      title: '删除宏文件',
+      description: `确认永久删除「${state.selectedMacro}」？删除后不可恢复。`,
+      confirmText: '立即删除',
+      danger: true,
+    });
+    if (!ok) return;
 
     await apiCall('delete_macro', state.selectedMacro);
     showToast('已删除宏文件');
@@ -475,7 +551,7 @@ export function bindMacroActions() {
     refreshSchemeTabsQuietly();
   });
 
-  q('#btnCaptureKey').addEventListener('click', async () => {
+  q('#btnCaptureKey')?.addEventListener('click', async () => {
     showToast('请在 8 秒内按下键盘或鼠标侧键');
     const res = await apiCall('capture_next_binding', 8);
     if (res.canceled) {
@@ -486,7 +562,7 @@ export function bindMacroActions() {
     showToast(`已捕获：${res.key}`);
   });
 
-  q('#btnBindMacro').addEventListener('click', async () => {
+  q('#btnBindMacro')?.addEventListener('click', async () => {
     const macroPath = state.selectedMacro || q('#selectedMacroPath').value.trim();
     if (!macroPath) return showToast('请先选择宏文件');
 
@@ -499,19 +575,18 @@ export function bindMacroActions() {
     if (ret.already_bound) {
       showToast(`已存在同名绑定：${trigger}`);
     } else if (ret.replaced_existing && !ret.multi_bind_enabled) {
-      showToast(`已覆盖原绑定并重新绑定：${trigger}`);
+      showToast(`已覆盖原绑定：${trigger}`);
     } else if (ret.append) {
       showToast(`已追加到触发键：${trigger}`);
     } else {
       showToast(`绑定成功：${trigger}`);
     }
-    // 绑定完就把这一条选中，和列表里高亮的行对上
     state.selectedBindingTrigger = String(trigger).trim().toLowerCase();
     await refreshBindings();
     refreshSchemeTabsQuietly();
   });
 
-  q('#btnRunNow').addEventListener('click', async () => {
+  q('#btnRunNow')?.addEventListener('click', async () => {
     const trigger = q('#bindTrigger').value.trim().toLowerCase();
     if (!trigger) return showToast('请先输入触发键');
     await runBindingOnce(trigger);
@@ -521,11 +596,7 @@ export function bindMacroActions() {
     try {
       const ret = await apiCall('toggle_global_listeners');
       await refreshListenerButtonState();
-      if (ret.running) {
-        showToast('正在启动全局监听');
-        return;
-      }
-      showToast('已请求关闭全局监听');
+      showToast(ret.running ? '正在启动全局监听' : '已请求关闭全局监听');
     } catch (err) {
       showToast(err.message);
     }
@@ -541,14 +612,13 @@ export function bindMacroActions() {
     }
   }
 
-  q('#btnStartListeners').addEventListener('click', toggleListeners);
-  q('#btnGlobalPause').addEventListener('click', togglePause);
-  q('#bindingListenBadge').addEventListener('click', (event) => {
+  q('#btnStartListeners')?.addEventListener('click', toggleListeners);
+  q('#btnGlobalPause')?.addEventListener('click', togglePause);
+  q('#bindingListenBadge')?.addEventListener('click', (event) => {
     if (event.currentTarget.classList.contains('paused')) return togglePause();
     return toggleListeners();
   });
 
-  // 按键嗅探：直接回答「我按侧键，软件到底收到没有」
   q('#btnSniffInputs')?.addEventListener('click', async () => {
     showToast('请在 6 秒内按几下鼠标侧键', 5000);
     try {
@@ -557,39 +627,34 @@ export function bindMacroActions() {
       const mouseCount = Number(ret.mouse_count || 0);
       if (side > 0) {
         showToast(
-          `检测到 ${side} 个侧键事件：${(ret.side_detail || []).join('、')}。可查看旁边的热键状态，再核对该绑定的触发模式。`,
-          10000,
+          `检测到 ${side} 个侧键事件：${(ret.side_detail || []).join('、')}。`,
+          9000,
         );
       } else if (mouseCount > 0) {
         showToast(
-          `收到 ${mouseCount} 个鼠标事件，其中没有侧键事件。请检查鼠标驱动是否将侧键映射为后退或前进键。`,
-          11000,
+          `收到 ${mouseCount} 个鼠标事件，但无侧键事件。请检查鼠标驱动映射。`,
+          9000,
         );
       } else {
-        showToast(
-          '6 秒内未检测到鼠标事件',
-          11000,
-        );
+        showToast('6 秒内未检测到鼠标事件', 8000);
       }
     } catch (err) {
       showToast(err.message);
     }
   });
 
-  // 换触发模式时，在下拉框下面提示这个模式到底怎么响应按下/抬起
   q('#bindMode')?.addEventListener('change', syncBindModeHint);
   syncBindModeHint();
 
-  q('#btnStopAll').addEventListener('click', async () => {
+  q('#btnStopAll')?.addEventListener('click', async () => {
     await apiCall('stop_all_macros');
     showToast('已停止全部宏');
     await refreshBindings();
   });
 
-  q('#btnImportFolder').addEventListener('click', async () => {
+  q('#btnImportFolder')?.addEventListener('click', async () => {
     const pick = await apiCall('choose_import_folder');
     if (pick.canceled) return;
-
     const ret = await apiCall('import_macros_from_folder', pick.path);
     showToast(`已导入 ${ret.count} 个宏文件`);
     await refreshMacros();

@@ -58,6 +58,9 @@ var contextTarget = null;
 var contextPos = null;
 var _graphDirty = false;
 var _currentScriptName = '未命名脚本';
+var _graphVariables = {};
+var _graphSettings = {};
+var _canvasRevision = 0;
 var _lastSavedGraph = null;
 var _clipboard = null;
 
@@ -235,8 +238,13 @@ function showToast(msg, type, duration) {
   var container = document.getElementById('toast-c');
   var icons = { ok: 'fa-solid fa-check-circle', err: 'fa-solid fa-exclamation-circle', inf: 'fa-solid fa-info-circle', warn: 'fa-solid fa-triangle-exclamation' };
   var toast = document.createElement('div');
-  toast.className = 'toast ' + type;
-  toast.innerHTML = '<i class="' + (icons[type] || icons.inf) + '"></i><span>' + msg + '</span>';
+  toast.className = 'toast ' + String(type || 'inf').replace(/[^a-zA-Z0-9_-]/g, '');
+  var iconEl = document.createElement('i');
+  iconEl.className = icons[type] || icons.inf;
+  var msgEl = document.createElement('span');
+  msgEl.textContent = String(msg == null ? '' : msg);
+  toast.appendChild(iconEl);
+  toast.appendChild(msgEl);
   container.appendChild(toast);
   setTimeout(function() {
     toast.style.opacity = '0';
@@ -258,6 +266,7 @@ function _nodeDisplayName(node) {
 function setExecutionState(state) {
   state = state.toUpperCase();
   AutomationCore.executionState = state;
+  document.getElementById('app').classList.toggle('is-executing', state === 'RUNNING' || state === 'PAUSED');
   var dot = document.getElementById('st-dot');
   var txt = document.getElementById('st-txt');
   if (state === 'RUNNING') {
@@ -286,6 +295,9 @@ function setExecutionState(state) {
 function updateStatusBar() {
   var nodes = AutomationCore.getNodes();
   var conns = AutomationCore.getConnections();
+  document.getElementById('workspace').classList.toggle('has-workflow',
+    nodes.some((node) => node._defKey !== 'flow/start') || conns.length > 0 ||
+    AutomationCore.getAnnotations().length > 0 || AutomationCore.getGroups().length > 0);
   var monitorCount = 0;
   var varNames = {};
   for (var i = 0; i < nodes.length; i++) {
@@ -340,9 +352,9 @@ function renderToolbox(filterText) {
     var header = document.createElement('div');
     header.className = 'sb-ch';
     header.innerHTML =
-      '<span class="cd" style="width:8px;height:8px;border-radius:2px;background:' + cat.color + ';display:inline-block;flex-shrink:0"></span>' +
-      '<span style="flex:1">' + cat.name + '</span>' +
-      '<span style="font-size:9px;color:var(--txt3);font-family:var(--fmo)">' + catNodes.length + '</span>' +
+      '<span class="cd" style="width:8px;height:8px;border-radius:2px;background:' + _aeEsc(cat.color) + ';display:inline-block;flex-shrink:0"></span>' +
+      '<span style="flex:1">' + _aeEsc(cat.name) + '</span>' +
+      '<span style="font-size:9px;color:var(--txt3);font-family:var(--fmo)">' + _aeEsc(catNodes.length) + '</span>' +
       '<i class="fa-solid fa-chevron-down ca"></i>';
     header.addEventListener('click', function() { this.parentElement.classList.toggle('col'); });
 
@@ -354,7 +366,7 @@ function renderToolbox(filterText) {
       item.className = 'sb-ni';
       item.dataset.nodeType = catNodes[ni].type;
       var iconClass = catNodes[ni].def.icon || 'fa-solid fa-circle';
-      item.innerHTML = '<i class="' + iconClass + '" style="color:' + catNodes[ni].def.color + '"></i><span>' + catNodes[ni].def.display_name + '</span>';
+      item.innerHTML = '<i class="' + _aeEsc(iconClass) + '" style="color:' + _aeEsc(catNodes[ni].def.color) + '"></i><span>' + _aeEsc(catNodes[ni].def.display_name) + '</span>';
       item.draggable = true;
       item.addEventListener('dragstart', (function(nt) {
         return function(e) {
@@ -389,7 +401,8 @@ function serializeGraph() {
   var connections = AutomationCore.getConnections();
   var annotations = AutomationCore.getAnnotations();
   var groups = AutomationCore.getGroups();
-  if (nodes.length === 0 && connections.length === 0 && annotations.length === 0 && groups.length === 0) return null;
+  if (!nodes.length && !connections.length && !annotations.length && !groups.length &&
+      !Object.keys(_graphVariables).length && !Object.keys(_graphSettings).length) return null;
 
   var outNodes = [];
   for (var i = 0; i < nodes.length; i++) {
@@ -468,8 +481,8 @@ function serializeGraph() {
 
   return {
     meta: { name: _currentScriptName || '未命名脚本', version: '2.0', created: new Date().toISOString(), modified: new Date().toISOString(), description: '' },
-    variables: {},
-    settings: {},
+    variables: _graphVariables,
+    settings: _graphSettings,
     graph: { nodes: outNodes, connections: outConns, annotations: outAnnotations, groups: outGroups },
   };
 }
@@ -477,8 +490,10 @@ function serializeGraph() {
 function deserializeGraph(jsonData) {
   if (!jsonData || !jsonData.graph) return false;
   AutomationCore.clear();
+  _graphVariables = jsonData.variables || {};
+  _graphSettings = jsonData.settings || {};
 
-  var nodeMap = Object.create(null);
+  var nodeMap = {};
   var maxId = 0;
   var graphNodes = jsonData.graph.nodes || [];
   for (var i = 0; i < graphNodes.length; i++) {
@@ -491,7 +506,7 @@ function deserializeGraph(jsonData) {
     node.pos[1] = Math.max(0, (nj.position && nj.position.y) || 0);
     if (nj.params) {
       for (var k in nj.params) {
-        if (!Object.hasOwn(nj.params, k) || k === '__proto__') continue;
+        if (!nj.params.hasOwnProperty(k)) continue;
         node.properties[k] = nj.params[k];
       }
     }
@@ -636,6 +651,7 @@ function handleFileImport(e) {
     try {
       var data = JSON.parse(ev.target.result);
       if (deserializeGraph(data)) {
+        _canvasRevision++;
         var importedName = (data.meta && data.meta.name) || '未命名脚本';
         _currentScriptName = importedName;
         _graphDirty = false;
@@ -733,6 +749,7 @@ function applyImportedMacro(rawText) {
         showToast('图结构无效，导入中止', 'err');
         return;
       }
+      _canvasRevision++;
       var stats = data.stats || {};
       _currentScriptName = (data.meta && data.meta.name) || name;
       _graphDirty = true;
@@ -810,6 +827,9 @@ function newCanvas() {
     }
   }
   AutomationCore.clearAll();
+  _canvasRevision++;
+  _graphVariables = {};
+  _graphSettings = {};
   AutomationCore.zoomReset();
   AutomationProperty.render(null);
   _currentScriptName = '未命名脚本';
@@ -1135,12 +1155,12 @@ function showContextMenu(x, y, items) {
     if (item.submenu) {
       subHtml = buildAddNodeSubmenu();
     }
-    var iconStyle = item.iconStyle ? ' style="' + item.iconStyle + '"' : '';
-    html += '<div class="cx-i" data-action="' + item.action + '">' +
-      '<i class="' + (item.icon || 'fa-solid fa-circle') + '"' + iconStyle + '></i>' +
-      '<span>' + item.label + '</span>' +
+    var iconStyle = item.iconStyle ? ' style="' + _aeEsc(item.iconStyle) + '"' : '';
+    html += '<div class="cx-i" data-action="' + _aeEsc(item.action) + '">' +
+      '<i class="' + _aeEsc(item.icon || 'fa-solid fa-circle') + '"' + iconStyle + '></i>' +
+      '<span>' + _aeEsc(item.label) + '</span>' +
       (item.submenu ? '<i class="fa-solid fa-chevron-right" style="margin-left:auto;font-size:8px"></i>' : '') +
-      (item.shortcut ? '<span style="margin-left:auto;font-size:9px;color:var(--txt3)">' + item.shortcut + '</span>' : '') +
+      (item.shortcut ? '<span style="margin-left:auto;font-size:9px;color:var(--txt3)">' + _aeEsc(item.shortcut) + '</span>' : '') +
       subHtml +
       '</div>';
   }
@@ -1180,15 +1200,15 @@ function buildAddNodeSubmenu() {
     var catKey = catOrder[ci];
     var cat = cats[catKey];
     if (!cat) continue;
-    html += '<div class="cx-sc">' + cat.name + '</div>';
+    html += '<div class="cx-sc">' + _aeEsc(cat.name) + '</div>';
     for (var ni = 0; ni < cat.nodes.length; ni++) {
       var nd = cat.nodes[ni];
       var def = AutomationNodes.getNodeDef(nd.type);
       var iconClass = (def && def.icon) ? def.icon : 'fa-solid fa-circle';
       var iconColor = (def && def.color) ? def.color : cat.color;
-      html += '<div class="cx-sn" data-node-type="' + nd.type + '">' +
-        '<i class="' + iconClass + '" style="color:' + iconColor + '"></i>' +
-        '<span>' + nd.name + '</span></div>';
+      html += '<div class="cx-sn" data-node-type="' + _aeEsc(nd.type) + '">' +
+        '<i class="' + _aeEsc(iconClass) + '" style="color:' + _aeEsc(iconColor) + '"></i>' +
+        '<span>' + _aeEsc(nd.name) + '</span></div>';
     }
   }
   html += '</div>';
@@ -1355,17 +1375,28 @@ function browseMacroPath(nodeId) {
   }
 }
 
+function _aeEsc(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 function showMacroTreePicker(nodeId, treeData) {
   var modal = document.createElement('div');
   modal.className = 'modal-overlay';
   modal.innerHTML =
     '<div class="modal-content" style="width:420px;max-height:520px">' +
-      '<div class="modal-header"><span>选择宏</span><button class="modal-close" onclick="this.closest(\'.modal-overlay\').remove()"><i class="fa-solid fa-xmark"></i></button></div>' +
+      '<div class="modal-header"><span>选择宏</span><button class="modal-close"><i class="fa-solid fa-xmark"></i></button></div>' +
       '<div class="modal-body" style="padding:8px;max-height:420px;overflow-y:auto">' +
         '<ul id="macro-tree-picker-list" style="list-style:none;padding:0;margin:0"></ul>' +
       '</div>' +
     '</div>';
   document.body.appendChild(modal);
+  var closeBtn = modal.querySelector('.modal-close');
+  if (closeBtn) closeBtn.addEventListener('click', function() { modal.remove(); });
 
   var listContainer = modal.querySelector('#macro-tree-picker-list');
   if (listContainer && window.renderMacroTreeList) {
@@ -1419,14 +1450,16 @@ function showTemplatePicker(nodeId, templates) {
   modal.className = 'modal-overlay';
   var listHtml = '';
   for (var i = 0; i < templates.length; i++) {
-    listHtml += '<div class="cx-i" data-path="' + templates[i].path + '" style="padding:10px 14px">' + templates[i].name + '</div>';
+    listHtml += '<div class="cx-i" data-path="' + _aeEsc(templates[i].path) + '" style="padding:10px 14px">' + _aeEsc(templates[i].name) + '</div>';
   }
   modal.innerHTML =
     '<div class="modal-content" style="width:400px;max-height:500px">' +
-      '<div class="modal-header"><span>选择模板图片</span><button class="modal-close" onclick="this.closest(\'.modal-overlay\').remove()"><i class="fa-solid fa-xmark"></i></button></div>' +
+      '<div class="modal-header"><span>选择模板图片</span><button class="modal-close"><i class="fa-solid fa-xmark"></i></button></div>' +
       '<div class="modal-body" style="padding:4px 0;max-height:380px;overflow-y:auto">' + listHtml + '</div>' +
     '</div>';
   document.body.appendChild(modal);
+  var closeBtn = modal.querySelector('.modal-close');
+  if (closeBtn) closeBtn.addEventListener('click', function() { modal.remove(); });
   var pathItems = modal.querySelectorAll('[data-path]');
   for (var j = 0; j < pathItems.length; j++) {
     pathItems[j].addEventListener('click', function() {
@@ -1447,14 +1480,16 @@ function showMacroPicker(nodeId, macros) {
   modal.className = 'modal-overlay';
   var listHtml = '';
   for (var i = 0; i < macros.length; i++) {
-    listHtml += '<div class="cx-i" data-path="' + macros[i].path + '" style="padding:10px 14px">' + macros[i].name + '</div>';
+    listHtml += '<div class="cx-i" data-path="' + _aeEsc(macros[i].path) + '" style="padding:10px 14px">' + _aeEsc(macros[i].name) + '</div>';
   }
   modal.innerHTML =
     '<div class="modal-content" style="width:400px;max-height:500px">' +
-      '<div class="modal-header"><span>选择宏文件</span><button class="modal-close" onclick="this.closest(\'.modal-overlay\').remove()"><i class="fa-solid fa-xmark"></i></button></div>' +
+      '<div class="modal-header"><span>选择宏文件</span><button class="modal-close"><i class="fa-solid fa-xmark"></i></button></div>' +
       '<div class="modal-body" style="padding:4px 0;max-height:380px;overflow-y:auto">' + listHtml + '</div>' +
     '</div>';
   document.body.appendChild(modal);
+  var closeBtn = modal.querySelector('.modal-close');
+  if (closeBtn) closeBtn.addEventListener('click', function() { modal.remove(); });
   var pathItems = modal.querySelectorAll('[data-path]');
   for (var j = 0; j < pathItems.length; j++) {
     pathItems[j].addEventListener('click', function() {
@@ -1490,15 +1525,17 @@ function showWindowPicker(nodeId, paramKey, windows) {
   var listHtml = '';
   for (var i = 0; i < windows.length; i++) {
     var w = windows[i];
-    var displayText = w.title + '（' + w.class_name + '）';
-    listHtml += '<div class="cx-i" data-hwnd="' + w.hwnd + '" data-hwnd-title="' + w.title.replace(/"/g, '&quot;') + '" style="padding:8px 14px;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="' + displayText.replace(/"/g, '&quot;') + '">' + displayText + '</div>';
+    var displayText = String(w.title || '') + '（' + String(w.class_name || '') + '）';
+    listHtml += '<div class="cx-i" data-hwnd="' + _aeEsc(w.hwnd) + '" data-hwnd-title="' + _aeEsc(w.title || '') + '" style="padding:8px 14px;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="' + _aeEsc(displayText) + '">' + _aeEsc(displayText) + '</div>';
   }
   modal.innerHTML =
     '<div class="modal-content" style="width:450px;max-height:500px">' +
-      '<div class="modal-header"><span>选择窗口</span><button class="modal-close" onclick="this.closest(\'.modal-overlay\').remove()"><i class="fa-solid fa-xmark"></i></button></div>' +
+      '<div class="modal-header"><span>选择窗口</span><button class="modal-close"><i class="fa-solid fa-xmark"></i></button></div>' +
       '<div class="modal-body" style="padding:4px 0;max-height:380px;overflow-y:auto">' + listHtml + '</div>' +
     '</div>';
   document.body.appendChild(modal);
+  var closeBtn = modal.querySelector('.modal-close');
+  if (closeBtn) closeBtn.addEventListener('click', function() { modal.remove(); });
   var items = modal.querySelectorAll('[data-hwnd-title]');
   for (var j = 0; j < items.length; j++) {
     items[j].addEventListener('click', function() {
@@ -1528,30 +1565,31 @@ function runPreview(defKey, nodeId) {
         .then(function(res) {
           if (res && res.ok && res.data) {
             var d = res.data;
+            var col = /^#[0-9a-fA-F]{3,8}$/.test(String(d.center_color || '')) ? String(d.center_color) : '#000';
             area.innerHTML = '<div style="text-align:center">' +
               '<div style="display:flex;align-items:center;gap:8px;justify-content:center">' +
-                '<div style="width:24px;height:24px;border-radius:4px;background:' + (d.center_color || '#000') + ';border:1px solid var(--border)"></div>' +
-                '<span style="font-family:var(--fmo);font-size:13px">' + (d.center_color || '—') + '</span>' +
+                '<div style="width:24px;height:24px;border-radius:4px;background:' + _aeEsc(col) + ';border:1px solid var(--border)"></div>' +
+                '<span style="font-family:var(--fmo);font-size:13px">' + _aeEsc(d.center_color || '—') + '</span>' +
               '</div></div>';
           } else {
-            area.innerHTML = '<span style="color:var(--red)">' + ((res && res.error) || '预览失败') + '</span>';
+            area.innerHTML = '<span style="color:var(--red)">' + _aeEsc((res && res.error) || '预览失败') + '</span>';
           }
         })
-        .catch(function(err) { area.innerHTML = '<span style="color:var(--red)">' + (err.message || err) + '</span>'; });
+        .catch(function(err) { area.innerHTML = '<span style="color:var(--red)">' + _aeEsc(err.message || err) + '</span>'; });
     } else if (defKey.indexOf('check_ocr') >= 0 || defKey.indexOf('monitor_ocr') >= 0) {
       window.pywebview.api.preview_ocr(params.mode, JSON.stringify(params.rect || [0,0,100,30]), params.hwnd_var || '', params.engine || 'rapidocr')
         .then(function(res) {
           if (res && res.ok && res.data) {
             var d = res.data;
             area.innerHTML = '<div style="text-align:center">' +
-              '<div style="font-family:var(--fmo);font-size:13px">' + (d.text || '(空)') + '</div>' +
-              '<div style="font-size:10px;color:var(--txt3);margin-top:4px">置信度：' + (d.confidence ? d.confidence.toFixed(1) : '-') + '%</div>' +
+              '<div style="font-family:var(--fmo);font-size:13px">' + _aeEsc(d.text || '(空)') + '</div>' +
+              '<div style="font-size:10px;color:var(--txt3);margin-top:4px">置信度：' + (d.confidence ? _aeEsc(d.confidence.toFixed(1)) : '-') + '%</div>' +
             '</div>';
           } else {
-            area.innerHTML = '<span style="color:var(--red)">' + ((res && res.error) || '预览失败') + '</span>';
+            area.innerHTML = '<span style="color:var(--red)">' + _aeEsc((res && res.error) || '预览失败') + '</span>';
           }
         })
-        .catch(function(err) { area.innerHTML = '<span style="color:var(--red)">' + (err.message || err) + '</span>'; });
+        .catch(function(err) { area.innerHTML = '<span style="color:var(--red)">' + _aeEsc(err.message || err) + '</span>'; });
     } else {
       area.innerHTML = '<span style="color:var(--txt3)">此节点暂不支持预览</span>';
     }
@@ -1924,19 +1962,47 @@ function initEditor() {
 
   initSidebarResize();
   initSidebarToggle();
+  const workspace = document.getElementById('workspace');
+  const preview = document.getElementById('btn-narrow-preview');
+  const setNarrowPreview = (open) => {
+    workspace.classList.toggle('narrow-preview', open);
+    preview.setAttribute('aria-pressed', String(open));
+    preview.textContent = open ? '返回对话' : '流程预览';
+  };
+  preview.addEventListener('click', () => {
+    const show = !workspace.classList.contains('narrow-preview');
+    setNarrowPreview(show);
+    if (show && AutomationCore.getNodes().length) fitView();
+  });
+  const narrow = matchMedia('(max-width: 740px)');
+  narrow.addEventListener('change', () => {
+    setNarrowPreview(false);
+    if (AutomationCore.getNodes().length) fitView();
+  });
+  const menus = [...document.querySelectorAll('.editor-menu')];
+  document.addEventListener('click', (event) => {
+    for (const menu of menus) {
+      if (!menu.contains(event.target) || event.target.closest('button')) menu.open = false;
+    }
+  });
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') for (const menu of menus) menu.open = false;
+  });
   bindGraphAssistant({
     read: serializeGraph,
     write: applyAssistantGraph,
+    identity: () => _canvasRevision,
     nodeName: (type) => AutomationNodes.getNodeDef(type)?.display_name || type,
     parameterName: (type, name) => {
       const schema = AutomationNodes.getNodeDef(type)?.params_schema?.[name];
       return schema?.label || schema?.description || name;
     },
     portName: (name) => AutomationNodes.toZhPortName(name),
-    onVisibility: () => {
+    onVisibility: (open) => {
+      document.getElementById('btn-manual-editor').setAttribute('aria-pressed', String(!open));
+      setNarrowPreview(false);
       _repositionMinimap();
-      AutomationCore.refreshAllConnections();
-      updateMinimap();
+      if (AutomationCore.getNodes().length && workspace.clientWidth) fitView();
     },
   });
   requestAnimationFrame(function() { _repositionMinimap(); });
@@ -1944,6 +2010,7 @@ function initEditor() {
   var existingNodes = AutomationCore.lgGraphObj.getNodes();
   if (existingNodes.length === 0) {
       function addStartWhenReady() {
+          if (AutomationCore.getNodes().length) return;
           var cv = document.getElementById('cv-area');
           if (cv && cv.clientWidth > 0 && cv.clientHeight > 0) {
               AutomationCore.zoomReset();

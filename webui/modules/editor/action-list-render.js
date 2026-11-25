@@ -1,5 +1,7 @@
 import { state } from '../core/state.js';
 import { q, showToast } from '../core/dom.js';
+import { openConfirmDialog } from '../core/dialog.js';
+import { iconEl } from '../core/icons.js';
 import {
   pathKey,
   isContainerAction,
@@ -213,7 +215,7 @@ export function refreshMultiSelectBar() {
   const text = q('#multiSelectText');
   if (text) {
     const extra = actions > count ? `（共 ${actions} 条动作）` : '';
-    text.textContent = `已选 ${count} 项${extra} · 点一下加入、再点一下移出；Ctrl 点击只留这一项；Shift 点击选一段；Esc 或点空白取消。「删除选中」一次删完全部选中项；拖任意一项到宏组 / 循环 / 目标位置，整批一起搬`;
+    text.textContent = `已选 ${count} 项${extra} · 可拖拽整批移动，或点「删除」一次清空所选`;
   }
 }
 
@@ -335,33 +337,37 @@ function dropRowTargetFromData(e, line) {
   return true;
 }
 
-function updateCurrentActionFromEditor(options = {}) {
+async function updateCurrentActionFromEditor(options = {}) {
   const silent = Boolean(options.silent);
   if (!Array.isArray(state.selectedActionPath) || !state.selectedActionPath.length) {
-    if (!silent) showToast('请先在右侧列表中选择一个动作');
-    return;
+    if (!silent) showToast('请先在列表中选择一个动作');
+    return false;
   }
 
   const info = getActionAndContainerByPath(state.selectedActionPath);
   if (!info) {
     if (!silent) showToast('选中动作已失效，请重新选择');
-    return;
+    return false;
   }
 
   const existing = info.action;
   const fromContainer = isContainerAction(existing);
   const fromKind = containerKind(existing);
   const toType = q('#actionType').value;
-  // 循环 ↔ 宏组 互转时容器体是带着走的，真正会丢内容的只有「容器 → 普通动作」
   const toIsContainer = toType === 'loop' || toType === 'group';
 
   if (fromContainer && !toIsContainer) {
     if (silent) {
-      return;
+      return false;
     }
     const label = CONTAINER_NAMES[fromKind] || '容器';
-    const ok = window.confirm(`当前选中的是${label}动作，改成其他类型会丢掉${label}体内的动作。\n\n点「确定」继续（${label}体内的动作会被清空）；\n点「取消」保持${label}动作不变。`);
-    if (!ok) return;
+    const ok = await openConfirmDialog({
+      title: `修改${label}类型`,
+      description: `当前选中的是${label}容器，改为普通动作会清空${label}体内的子动作，确认继续？`,
+      confirmText: '确认修改',
+      danger: true,
+    });
+    if (!ok) return false;
   }
 
   const next = buildActionFromInputs({ existingAction: existing });
@@ -373,6 +379,7 @@ function updateCurrentActionFromEditor(options = {}) {
 
   renderActionList();
   if (!silent) showToast('当前动作已修改');
+  return true;
 }
 
 export function renderActionList() {
@@ -523,7 +530,7 @@ function renderBlockRows(list) {
       const toggle = document.createElement('button');
       toggle.type = 'button';
       toggle.className = 'loop-toggle';
-      toggle.textContent = line.expanded ? '▼' : '▶';
+      toggle.appendChild(iconEl(line.expanded ? 'chevDown' : 'chevRight', 11));
       toggle.addEventListener('click', (e) => {
         e.stopPropagation();
         toggleExpandedLoop(line.path);
@@ -533,6 +540,10 @@ function renderBlockRows(list) {
         toggleExpandedLoop(line.path);
       });
       textWrap.appendChild(toggle);
+      const badge = document.createElement('span');
+      badge.className = `action-badge cmd-${line.container}`;
+      badge.textContent = line.container === 'group' ? '宏组' : '循环';
+      textWrap.appendChild(badge);
       textWrap.appendChild(document.createTextNode(formatActionLabel(line.action, line.expanded)));
     } else if (line.kind === 'container_end') {
       const name = String(line.action?.[1] ?? '').trim();
@@ -542,8 +553,23 @@ function renderBlockRows(list) {
       ));
     } else if (line.kind === 'container_empty') {
       const label = CONTAINER_NAMES[line.container] || '容器';
-      textWrap.appendChild(document.createTextNode(`（${label}体内暂无动作，从左侧块库拖块到这里）`));
+      textWrap.appendChild(document.createTextNode(`（空${label}：将左侧块拖入此处）`));
     } else {
+      const cmd = String(line.action?.[0] ?? '').trim().toLowerCase();
+      const BADGE_NAMES = {
+        kd: '按下',
+        ku: '松开',
+        md: '鼠标↓',
+        mu: '鼠标↑',
+        wait: '等待',
+        view: '视角',
+        import: '子宏',
+        note: '注释',
+      };
+      const badge = document.createElement('span');
+      badge.className = `action-badge cmd-${cmd || 'other'}`;
+      badge.textContent = BADGE_NAMES[cmd] || cmd || '动作';
+      textWrap.appendChild(badge);
       textWrap.appendChild(document.createTextNode(formatActionLabel(line.action, false)));
     }
 
@@ -556,8 +582,8 @@ function renderBlockRows(list) {
       const saveBtn = document.createElement('button');
       saveBtn.type = 'button';
       saveBtn.className = 'group-save';
-      saveBtn.textContent = '⤓ 存组';
-      saveBtn.title = '存进宏组库：可以起名字、选文件夹；左栏「我的宏组」随后可以直接拖用';
+      saveBtn.textContent = '存组';
+      saveBtn.title = '存进宏组库：可起名字、归文件夹并在左侧拖用';
       saveBtn.addEventListener('click', (e) => {
         e.stopPropagation();
         saveGroupToLibraryFromPath(line.path);
@@ -764,7 +790,7 @@ function renderTimelineFlow(list) {
       const toggle = document.createElement('button');
       toggle.type = 'button';
       toggle.className = 'loop-toggle';
-      toggle.textContent = node.expanded ? '▼' : '▶';
+      toggle.appendChild(iconEl(node.expanded ? 'chevDown' : 'chevRight', 11));
       toggle.addEventListener('click', (e) => {
         e.stopPropagation();
         toggleExpandedLoop(node.path);
@@ -782,8 +808,8 @@ function renderTimelineFlow(list) {
       const saveBtn = document.createElement('button');
       saveBtn.type = 'button';
       saveBtn.className = 'group-save group-save-chip';
-      saveBtn.textContent = '⤓';
-      saveBtn.title = '存进宏组库：可以起名字、选文件夹；左栏可以直接拖用';
+      saveBtn.textContent = '存组';
+      saveBtn.title = '存进宏组库：可起名字、归文件夹并在左侧拖用';
       saveBtn.addEventListener('click', (e) => {
         e.stopPropagation();
         saveGroupToLibraryFromPath(node.path);

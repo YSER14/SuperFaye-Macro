@@ -4,18 +4,11 @@ import { cloneAction } from './action-model.js';
 import { setSelectedLine, getActionAtPath } from './action-ops.js';
 import { fillActionEditorByAction, ensureActionFormDefaultsForType } from './action-form.js';
 
-/**
- * 动作列表的撤销 / 重做 / 清空。
- *
- * 记录方式：不做「每处改动手动登记」，而是在每次 renderActionList() 之后比对
- * state.editorRows 的结构签名 —— 签名变了才落一个历史点，选择变化/纯 UI 重绘不占步数。
- * 这样块库拖拽、行内编辑、注释、宏组库、录制并进、AI 应用、时间轴移动……全都自动覆盖。
- */
 const MAX_STEPS = 80;
 
-const entries = [];   // [{ sig, rows, path, kind }]
-let cursor = -1;      // 当前落点：entries[cursor]
-let applying = false; // 正在回放历史，别再记一条
+const entries = [];
+let cursor = -1;
+let applying = false;
 
 function snapshotRows() {
   return cloneAction(Array.isArray(state.editorRows) ? state.editorRows : []);
@@ -25,7 +18,6 @@ function signature(rows) {
   try {
     return JSON.stringify(rows);
   } catch (err) {
-    // 真出现循环引用也别让整个列表挂掉：给个唯一值，宁可多记一步
     return `sig-${Date.now()}-${Math.random()}`;
   }
 }
@@ -49,7 +41,6 @@ function setDisabled(button, disabled) {
   button.disabled = disabled;
 }
 
-/** 按钮可用状态 + 悬停说明 */
 export function refreshHistoryButtons() {
   const undoBtn = q('#btnUndoAction');
   const redoBtn = q('#btnRedoAction');
@@ -71,7 +62,6 @@ export function refreshHistoryButtons() {
   }
 }
 
-/** 换文件 / 新建 / 重新加载时调用：历史清空，下一次渲染成为新基线 */
 export function resetHistory() {
   entries.length = 0;
   cursor = -1;
@@ -79,19 +69,20 @@ export function resetHistory() {
   refreshHistoryButtons();
 }
 
-/* ── 「有未保存改动」提示 ────────────────────────────────────────────
- * 动作列表改了但没点「保存当前宏」时，触发键跑的还是磁盘上的旧宏 ——
- * 用户很容易以为「刚加的循环没生效」。这里把状态直接写在保存按钮上。
- */
 export function refreshSaveButtonState() {
-  const btn = q('#btnSaveEditor');
-  if (!btn) return;
   const dirty = Boolean(state.editorDirty);
-  btn.classList.toggle('unsaved', dirty);
-  btn.textContent = dirty ? '保存当前宏 *' : '保存当前宏';
-  btn.title = dirty
-    ? '动作列表有未保存的改动：点这里写进宏文件，触发键才会用上新的循环/次数'
-    : '把动作列表写进当前宏文件（Ctrl+S）';
+  const btn = q('#btnSaveEditor');
+  if (btn) {
+    btn.classList.toggle('unsaved', dirty);
+    btn.textContent = dirty ? '保存当前宏 *' : '保存当前宏';
+    btn.title = dirty
+      ? '动作列表有未保存改动：保存后触发键才会生效'
+      : '把动作列表写进当前宏文件（Ctrl+S）';
+  }
+  const navDot = q('#navEditorDirtyDot');
+  if (navDot) navDot.hidden = !dirty;
+  const pill = q('#editorActiveFilePill');
+  if (pill) pill.classList.toggle('is-dirty', dirty);
 }
 
 export function markEditorDirty() {
@@ -105,24 +96,20 @@ export function markEditorClean() {
   refreshSaveButtonState();
 }
 
-/** 每次渲染动作列表之后调用；只有动作内容真的变了才落历史点 */
 export function syncHistoryFromRows() {
   if (applying) return;
 
   const now = captureState();
   const top = cursor >= 0 ? entries[cursor] : null;
-  // 刚加载/新建出来的第一份内容就是磁盘上的样子，不算「未保存改动」
   const isFirstBaseline = entries.length === 0 && cursor < 0;
 
   if (top && top.sig === now.sig) {
-    // 内容没变（只是换了选中行、切了视图）：只把选中状态同步到当前这一步
     top.path = now.path;
     top.kind = now.kind;
     refreshHistoryButtons();
     return;
   }
 
-  // 有新改动就把「重做」那条分支丢掉
   entries.splice(cursor + 1);
   entries.push(now);
   if (entries.length > MAX_STEPS) entries.shift();
@@ -157,13 +144,13 @@ function applyEntry(entry) {
 
 export function undoAction() {
   if (cursor <= 0) {
-    showToast('已经回到最初状态了，没有可撤销的改动');
+    showToast('已经回到最初状态了');
     refreshHistoryButtons();
     return false;
   }
   cursor -= 1;
   applyEntry(entries[cursor]);
-  showToast(`已撤销一步 · 当前 ${entries[cursor].rows.length} 条动作`);
+  showToast(`已撤销 · 当前 ${entries[cursor].rows.length} 条动作`);
   return true;
 }
 
@@ -175,11 +162,10 @@ export function redoAction() {
   }
   cursor += 1;
   applyEntry(entries[cursor]);
-  showToast(`已重做一步 · 当前 ${entries[cursor].rows.length} 条动作`);
+  showToast(`已重做 · 当前 ${entries[cursor].rows.length} 条动作`);
   return true;
 }
 
-/** 清空整个动作列表（本身是一步历史，能撤销回来） */
 export function clearActionList() {
   if (!Array.isArray(state.editorRows) || !state.editorRows.length) {
     showToast('动作列表已经是空的');
@@ -197,7 +183,7 @@ export function clearActionList() {
   if (render) render();
   else refreshHistoryButtons();
 
-  showToast(`已清空 ${count} 条动作（Ctrl+Z 可撤销；点「保存当前宏」才写进文件）`);
+  showToast(`已清空 ${count} 条动作（Ctrl+Z 可撤销）`);
   return true;
 }
 
@@ -211,7 +197,6 @@ function editorTabActive() {
   return Boolean(page && page.classList.contains('active'));
 }
 
-/** 绑按钮 + 键盘（Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y） */
 export function bindActionHistory() {
   const undoBtn = q('#btnUndoAction');
   const redoBtn = q('#btnRedoAction');
@@ -224,7 +209,7 @@ export function bindActionHistory() {
   window.addEventListener('keydown', (event) => {
     if (!(event.ctrlKey || event.metaKey)) return;
     if (event.altKey) return;
-    if (isTypingTarget(event.target)) return; // 输入框里留给浏览器自带的文本撤销
+    if (isTypingTarget(event.target)) return;
     if (!editorTabActive()) return;
 
     const key = String(event.key || '').toLowerCase();

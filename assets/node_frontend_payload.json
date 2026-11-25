@@ -1,0 +1,2268 @@
+{
+  "nodes": {
+    "action/mouse_click": {
+      "type": "action/mouse_click",
+      "category": "action",
+      "display_name": "鼠标点击",
+      "color": "#22c55e",
+      "inputs": [
+        {
+          "name": "in",
+          "type": "flow"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "next",
+          "type": "flow"
+        }
+      ],
+      "params_schema": {
+        "mode": {
+          "type": "string",
+          "enum": [
+            "screen",
+            "window",
+            "relative"
+          ],
+          "default": "screen",
+          "description": "坐标模式"
+        },
+        "x": {
+          "type": "number",
+          "default": 0,
+          "description": "X坐标"
+        },
+        "y": {
+          "type": "number",
+          "default": 0,
+          "description": "Y坐标"
+        },
+        "hwnd_var": {
+          "type": "string",
+          "default": "",
+          "description": "窗口句柄变量名"
+        },
+        "button": {
+          "type": "string",
+          "enum": [
+            "left",
+            "right",
+            "middle"
+          ],
+          "default": "left",
+          "description": "鼠标按键"
+        },
+        "click_type": {
+          "type": "string",
+          "enum": [
+            "click",
+            "dblclick",
+            "press",
+            "release",
+            "long_press"
+          ],
+          "default": "click",
+          "description": "点击类型"
+        },
+        "hold_time": {
+          "type": "number",
+          "default": 0,
+          "description": "长按持续时间（ms）"
+        },
+        "move_duration": {
+          "type": "number",
+          "default": 0,
+          "description": "移动到目标坐标的耗时（ms）"
+        },
+        "before_delay": {
+          "type": "number",
+          "default": 0,
+          "description": "点击前额外等待（ms）"
+        },
+        "after_delay": {
+          "type": "number",
+          "default": 0,
+          "description": "点击后额外等待（ms）"
+        }
+      }
+    },
+    "action/key_action": {
+      "type": "action/key_action",
+      "category": "action",
+      "display_name": "按键动作",
+      "color": "#22c55e",
+      "inputs": [
+        {
+          "name": "in",
+          "type": "flow"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "next",
+          "type": "flow"
+        }
+      ],
+      "params_schema": {
+        "action": {
+          "type": "string",
+          "enum": [
+            "press",
+            "release",
+            "type"
+          ],
+          "default": "press",
+          "description": "动作类型"
+        },
+        "key": {
+          "type": "string",
+          "default": "",
+          "description": "按键名"
+        },
+        "delay": {
+          "type": "number",
+          "default": 0,
+          "description": "动作后延迟（ms）"
+        }
+      }
+    },
+    "action/mouse_scroll": {
+      "type": "action/mouse_scroll",
+      "category": "action",
+      "display_name": "鼠标滚轮",
+      "color": "#22c55e",
+      "inputs": [
+        {
+          "name": "in",
+          "type": "flow"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "next",
+          "type": "flow"
+        }
+      ],
+      "params_schema": {
+        "delta": {
+          "type": "number",
+          "default": 120,
+          "description": "滚动量（正值向上）"
+        },
+        "delay": {
+          "type": "number",
+          "default": 0,
+          "description": "动作后延迟（ms）"
+        }
+      }
+    },
+    "action/text_input": {
+      "type": "action/text_input",
+      "category": "action",
+      "display_name": "文本输入",
+      "color": "#22c55e",
+      "inputs": [
+        {
+          "name": "in",
+          "type": "flow"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "next",
+          "type": "flow"
+        }
+      ],
+      "params_schema": {
+        "text": {
+          "type": "string",
+          "default": "",
+          "description": "要输入的文本"
+        },
+        "interval": {
+          "type": "number",
+          "default": 50,
+          "description": "字符间间隔（ms）"
+        },
+        "before_delay": {
+          "type": "number",
+          "default": 0,
+          "description": "输入前等待（ms）"
+        }
+      }
+    },
+    "action/wait": {
+      "type": "action/wait",
+      "category": "action",
+      "display_name": "等待",
+      "color": "#22c55e",
+      "inputs": [
+        {
+          "name": "in",
+          "type": "flow"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "next",
+          "type": "flow"
+        }
+      ],
+      "params_schema": {
+        "duration": {
+          "type": "number",
+          "default": 1000,
+          "description": "等待时长（ms）"
+        }
+      }
+    },
+    "action/mouse_move": {
+      "type": "action/mouse_move",
+      "category": "action",
+      "display_name": "鼠标移动",
+      "color": "#22c55e",
+      "inputs": [
+        {
+          "name": "in",
+          "type": "flow"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "next",
+          "type": "flow"
+        }
+      ],
+      "params_schema": {
+        "mode": {
+          "type": "string",
+          "enum": [
+            "screen",
+            "window",
+            "relative"
+          ],
+          "default": "screen",
+          "description": "坐标模式"
+        },
+        "x": {
+          "type": "number",
+          "default": 0,
+          "description": "目标X坐标"
+        },
+        "y": {
+          "type": "number",
+          "default": 0,
+          "description": "目标Y坐标"
+        },
+        "hwnd_var": {
+          "type": "string",
+          "default": "",
+          "description": "窗口句柄变量名"
+        },
+        "duration": {
+          "type": "number",
+          "default": 200,
+          "description": "移动耗时（ms）"
+        },
+        "easing": {
+          "type": "string",
+          "enum": [
+            "linear",
+            "ease_in_out",
+            "ease_in",
+            "ease_out"
+          ],
+          "default": "ease_in_out",
+          "description": "缓动函数"
+        }
+      }
+    },
+    "action/mouse_move_rel": {
+      "type": "action/mouse_move_rel",
+      "category": "action",
+      "display_name": "相对位移",
+      "color": "#22c55e",
+      "inputs": [
+        {
+          "name": "in",
+          "type": "flow"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "next",
+          "type": "flow"
+        }
+      ],
+      "params_schema": {
+        "dx": {
+          "type": "number",
+          "default": 100,
+          "description": "水平偏移（像素）"
+        },
+        "dy": {
+          "type": "number",
+          "default": 0,
+          "description": "垂直偏移（像素）"
+        },
+        "duration": {
+          "type": "number",
+          "default": 200,
+          "description": "移动耗时（ms）"
+        }
+      }
+    },
+    "action/mouse_button": {
+      "type": "action/mouse_button",
+      "category": "action",
+      "display_name": "鼠标按键（原地）",
+      "color": "#22c55e",
+      "inputs": [
+        {
+          "name": "in",
+          "type": "flow"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "next",
+          "type": "flow"
+        }
+      ],
+      "params_schema": {
+        "button": {
+          "type": "string",
+          "enum": [
+            "left",
+            "right",
+            "middle"
+          ],
+          "default": "left",
+          "description": "鼠标按键"
+        },
+        "click_type": {
+          "type": "string",
+          "enum": [
+            "click",
+            "dblclick",
+            "press",
+            "release",
+            "long_press"
+          ],
+          "default": "click",
+          "description": "点击类型"
+        },
+        "hold_time": {
+          "type": "number",
+          "default": 0,
+          "description": "长按持续时间（ms）"
+        },
+        "delay": {
+          "type": "number",
+          "default": 0,
+          "description": "动作后延迟（ms）"
+        }
+      }
+    },
+    "control/if_else": {
+      "type": "control/if_else",
+      "category": "control",
+      "display_name": "条件分支",
+      "color": "#a855f7",
+      "inputs": [
+        {
+          "name": "in",
+          "type": "flow"
+        },
+        {
+          "name": "cond",
+          "type": "data_bool"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "true",
+          "type": "flow"
+        },
+        {
+          "name": "false",
+          "type": "flow"
+        }
+      ],
+      "params_schema": {
+        "logic": {
+          "type": "string",
+          "enum": [
+            "AND",
+            "OR",
+            "NOT"
+          ],
+          "default": "AND",
+          "description": "逻辑组合"
+        },
+        "fallback": {
+          "type": "string",
+          "enum": [
+            "true",
+            "false"
+          ],
+          "default": "false",
+          "description": "无data连接时默认走向"
+        }
+      }
+    },
+    "control/loop_count": {
+      "type": "control/loop_count",
+      "category": "control",
+      "display_name": "计数循环",
+      "color": "#a855f7",
+      "inputs": [
+        {
+          "name": "in",
+          "type": "flow"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "body",
+          "type": "flow"
+        },
+        {
+          "name": "next",
+          "type": "flow"
+        }
+      ],
+      "params_schema": {
+        "count": {
+          "type": "number",
+          "default": 1,
+          "description": "循环次数"
+        },
+        "counter_var": {
+          "type": "string",
+          "default": "",
+          "description": "循环计数器变量名"
+        }
+      }
+    },
+    "control/loop_while": {
+      "type": "control/loop_while",
+      "category": "control",
+      "display_name": "条件循环",
+      "color": "#a855f7",
+      "inputs": [
+        {
+          "name": "in",
+          "type": "flow"
+        },
+        {
+          "name": "cond",
+          "type": "data_bool"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "body",
+          "type": "flow"
+        },
+        {
+          "name": "next",
+          "type": "flow"
+        }
+      ],
+      "params_schema": {
+        "max_iterations": {
+          "type": "number",
+          "default": 10000,
+          "description": "最大迭代次数"
+        },
+        "check_at": {
+          "type": "string",
+          "enum": [
+            "start",
+            "end"
+          ],
+          "default": "start",
+          "description": "检查时机"
+        }
+      }
+    },
+    "control/wait_cond": {
+      "type": "control/wait_cond",
+      "category": "control",
+      "display_name": "等待条件",
+      "color": "#a855f7",
+      "inputs": [
+        {
+          "name": "in",
+          "type": "flow"
+        },
+        {
+          "name": "cond",
+          "type": "data_bool"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "met",
+          "type": "flow"
+        },
+        {
+          "name": "timeout",
+          "type": "flow"
+        }
+      ],
+      "params_schema": {
+        "timeout": {
+          "type": "number",
+          "default": 10000,
+          "description": "超时（ms）"
+        },
+        "interval": {
+          "type": "number",
+          "default": 100,
+          "description": "检查间隔（ms）"
+        }
+      }
+    },
+    "control/goto": {
+      "type": "control/goto",
+      "category": "control",
+      "display_name": "跳转",
+      "color": "#a855f7",
+      "inputs": [
+        {
+          "name": "in",
+          "type": "flow"
+        }
+      ],
+      "outputs": [],
+      "params_schema": {
+        "target_node_id": {
+          "type": "string",
+          "default": "",
+          "description": "目标节点ID"
+        }
+      }
+    },
+    "control/seq_check": {
+      "type": "control/seq_check",
+      "category": "control",
+      "display_name": "序列检测",
+      "color": "#a855f7",
+      "inputs": [
+        {
+          "name": "in",
+          "type": "flow"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "pass",
+          "type": "flow"
+        },
+        {
+          "name": "fail",
+          "type": "flow"
+        }
+      ],
+      "params_schema": {
+        "steps": {
+          "type": "string",
+          "default": "",
+          "description": "步骤描述"
+        },
+        "retry": {
+          "type": "boolean",
+          "default": true,
+          "description": "失败后重试"
+        },
+        "max_retries": {
+          "type": "number",
+          "default": 100,
+          "description": "最大重试次数"
+        }
+      }
+    },
+    "control/state_machine": {
+      "type": "control/state_machine",
+      "category": "control",
+      "display_name": "状态机",
+      "color": "#a855f7",
+      "inputs": [
+        {
+          "name": "in",
+          "type": "flow"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "done",
+          "type": "flow"
+        }
+      ],
+      "params_schema": {
+        "states": {
+          "type": "string",
+          "default": "",
+          "description": "状态列表"
+        },
+        "fail_state": {
+          "type": "string",
+          "default": "",
+          "description": "失败回退状态名"
+        }
+      }
+    },
+    "script_block/call_script_sync": {
+      "type": "script_block/call_script_sync",
+      "category": "script_block",
+      "display_name": "调用宏（同步）",
+      "color": "#3b82f6",
+      "inputs": [
+        {
+          "name": "in",
+          "type": "flow"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "next",
+          "type": "flow"
+        }
+      ],
+      "params_schema": {
+        "path": {
+          "type": "string",
+          "default": "",
+          "format": "path",
+          "description": "旧JSON宏文件路径"
+        },
+        "speed_factor": {
+          "type": "number",
+          "default": 1.0,
+          "description": "倍速"
+        },
+        "timeline_mode": {
+          "type": "string",
+          "enum": [
+            "absolute",
+            "relative_compensated"
+          ],
+          "default": "absolute",
+          "description": "时间线模式"
+        },
+        "random_delay": {
+          "type": "boolean",
+          "default": false,
+          "description": "是否启用随机延迟修正"
+        }
+      }
+    },
+    "script_block/call_script_async": {
+      "type": "script_block/call_script_async",
+      "category": "script_block",
+      "display_name": "调用宏（异步）",
+      "color": "#3b82f6",
+      "inputs": [
+        {
+          "name": "in",
+          "type": "flow"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "next",
+          "type": "flow"
+        },
+        {
+          "name": "completed",
+          "type": "flow"
+        },
+        {
+          "name": "interrupted",
+          "type": "flow"
+        }
+      ],
+      "params_schema": {
+        "path": {
+          "type": "string",
+          "default": "",
+          "format": "path",
+          "description": "旧JSON宏文件路径"
+        },
+        "speed_factor": {
+          "type": "number",
+          "default": 1.0,
+          "description": "倍速"
+        },
+        "timeline_mode": {
+          "type": "string",
+          "enum": [
+            "absolute",
+            "relative_compensated"
+          ],
+          "default": "absolute",
+          "description": "时间线模式"
+        },
+        "random_delay": {
+          "type": "boolean",
+          "default": false,
+          "description": "是否启用随机延迟修正"
+        }
+      }
+    },
+    "detection/check_color": {
+      "type": "detection/check_color",
+      "category": "detection",
+      "display_name": "颜色检测",
+      "color": "#eab308",
+      "inputs": [
+        {
+          "name": "in",
+          "type": "flow"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "match",
+          "type": "flow"
+        },
+        {
+          "name": "no",
+          "type": "flow"
+        },
+        {
+          "name": "result",
+          "type": "data_bool"
+        },
+        {
+          "name": "color",
+          "type": "string"
+        }
+      ],
+      "params_schema": {
+        "mode": {
+          "type": "string",
+          "enum": [
+            "screen",
+            "window",
+            "relative"
+          ],
+          "default": "screen",
+          "description": "坐标模式"
+        },
+        "rect": {
+          "type": "array",
+          "format": "region",
+          "default": [
+            0,
+            0,
+            10,
+            10
+          ],
+          "description": "检测区域[x,y,w,h]"
+        },
+        "hwnd_var": {
+          "type": "string",
+          "default": "",
+          "description": "窗口句柄变量名"
+        },
+        "target_color": {
+          "type": "string",
+          "default": "#FF0000",
+          "format": "color",
+          "description": "目标颜色"
+        },
+        "tolerance": {
+          "type": "number",
+          "default": 10,
+          "description": "容差(0-255)"
+        },
+        "check_mode": {
+          "type": "string",
+          "enum": [
+            "exact",
+            "contain",
+            "change"
+          ],
+          "default": "contain",
+          "description": "检测模式"
+        },
+        "sample_mode": {
+          "type": "string",
+          "enum": [
+            "center",
+            "mean",
+            "max_diff"
+          ],
+          "default": "center",
+          "description": "采样模式"
+        },
+        "change_threshold": {
+          "type": "number",
+          "default": 10,
+          "description": "变化检测阈值",
+          "showWhen": "check_mode=change"
+        },
+        "store_var": {
+          "type": "string",
+          "default": "",
+          "description": "存储检测到的实际颜色值"
+        }
+      }
+    },
+    "detection/check_ocr": {
+      "type": "detection/check_ocr",
+      "category": "detection",
+      "display_name": "OCR识别",
+      "color": "#eab308",
+      "inputs": [
+        {
+          "name": "in",
+          "type": "flow"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "match",
+          "type": "flow"
+        },
+        {
+          "name": "no",
+          "type": "flow"
+        },
+        {
+          "name": "result",
+          "type": "data_bool"
+        },
+        {
+          "name": "text",
+          "type": "string"
+        },
+        {
+          "name": "number",
+          "type": "number"
+        }
+      ],
+      "params_schema": {
+        "mode": {
+          "type": "string",
+          "enum": [
+            "screen",
+            "window",
+            "relative"
+          ],
+          "default": "screen",
+          "description": "坐标模式"
+        },
+        "rect": {
+          "type": "array",
+          "format": "region",
+          "default": [
+            0,
+            0,
+            100,
+            30
+          ],
+          "description": "检测区域[x,y,w,h]"
+        },
+        "hwnd_var": {
+          "type": "string",
+          "default": "",
+          "description": "窗口句柄变量名"
+        },
+        "match_text": {
+          "type": "string",
+          "default": "",
+          "description": "匹配文本"
+        },
+        "match_mode": {
+          "type": "string",
+          "enum": [
+            "contain",
+            "exact",
+            "regex",
+            "number_gt",
+            "number_lt",
+            "number_eq"
+          ],
+          "default": "contain",
+          "description": "匹配模式"
+        },
+        "match_number": {
+          "type": "number",
+          "default": 0,
+          "description": "比较数值",
+          "showWhen": "match_mode=number_gt,number_lt,number_eq"
+        },
+        "engine": {
+          "type": "string",
+          "enum": [
+            "rapidocr"
+          ],
+          "default": "rapidocr",
+          "description": "OCR引擎"
+        },
+        "cache_strategy": {
+          "type": "string",
+          "enum": [
+            "frame_diff",
+            "time_interval",
+            "disabled"
+          ],
+          "default": "time_interval",
+          "description": "缓存策略"
+        },
+        "cache_interval_ms": {
+          "type": "number",
+          "default": 100,
+          "description": "缓存间隔（ms）",
+          "showWhen": "cache_strategy=time_interval"
+        },
+        "store_var": {
+          "type": "string",
+          "default": "",
+          "description": "存储识别到的原始文本"
+        },
+        "store_number": {
+          "type": "string",
+          "default": "",
+          "description": "存储提取的数字值"
+        }
+      }
+    },
+    "detection/check_image": {
+      "type": "detection/check_image",
+      "category": "detection",
+      "display_name": "图像匹配",
+      "color": "#eab308",
+      "inputs": [
+        {
+          "name": "in",
+          "type": "flow"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "match",
+          "type": "flow"
+        },
+        {
+          "name": "no",
+          "type": "flow"
+        },
+        {
+          "name": "result",
+          "type": "data_bool"
+        },
+        {
+          "name": "match_x",
+          "type": "number"
+        },
+        {
+          "name": "match_y",
+          "type": "number"
+        }
+      ],
+      "params_schema": {
+        "mode": {
+          "type": "string",
+          "enum": [
+            "screen",
+            "window",
+            "relative"
+          ],
+          "default": "screen",
+          "description": "坐标模式"
+        },
+        "rect": {
+          "type": "array",
+          "format": "region",
+          "default": [
+            0,
+            0,
+            0,
+            0
+          ],
+          "description": "搜索区域[x,y,w,h], 0=全屏"
+        },
+        "hwnd_var": {
+          "type": "string",
+          "default": "",
+          "description": "窗口句柄变量名"
+        },
+        "template_path": {
+          "type": "string",
+          "default": "",
+          "format": "path",
+          "description": "模板图片路径"
+        },
+        "threshold": {
+          "type": "number",
+          "default": 0.8,
+          "description": "匹配阈值(0-1)"
+        },
+        "method": {
+          "type": "string",
+          "enum": [
+            "tm_ccoeff_normed",
+            "tm_ccorr_normed",
+            "tm_sqdiff_normed"
+          ],
+          "default": "tm_ccoeff_normed",
+          "description": "匹配方法"
+        },
+        "multi_match": {
+          "type": "boolean",
+          "default": false,
+          "description": "是否匹配多个结果"
+        },
+        "store_var": {
+          "type": "string",
+          "default": "",
+          "description": "存储匹配位置变量名"
+        }
+      }
+    },
+    "detection/check_screen": {
+      "type": "detection/check_screen",
+      "category": "detection",
+      "display_name": "屏幕状态",
+      "color": "#eab308",
+      "inputs": [
+        {
+          "name": "in",
+          "type": "flow"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "match",
+          "type": "flow"
+        },
+        {
+          "name": "no",
+          "type": "flow"
+        },
+        {
+          "name": "result",
+          "type": "data_bool"
+        }
+      ],
+      "params_schema": {
+        "state": {
+          "type": "string",
+          "enum": [
+            "black",
+            "bright",
+            "frozen"
+          ],
+          "default": "black",
+          "description": "检测状态"
+        },
+        "threshold": {
+          "type": "number",
+          "default": 30,
+          "description": "亮度阈值(0-255)"
+        },
+        "region": {
+          "type": "array",
+          "format": "region",
+          "default": [
+            0,
+            0,
+            0,
+            0
+          ],
+          "description": "检测区域，0=全屏"
+        }
+      }
+    },
+    "variable/var_set": {
+      "type": "variable/var_set",
+      "category": "variable",
+      "display_name": "设置变量",
+      "color": "#f97316",
+      "inputs": [
+        {
+          "name": "in",
+          "type": "flow"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "next",
+          "type": "flow"
+        }
+      ],
+      "params_schema": {
+        "vars_json": {
+          "type": "string",
+          "default": "[]",
+          "description": "变量列表JSON"
+        },
+        "name": {
+          "type": "string",
+          "default": "",
+          "description": "变量名（单变量模式）"
+        },
+        "value": {
+          "type": "string",
+          "default": "",
+          "description": "变量值(支持${var}引用)"
+        },
+        "var_type": {
+          "type": "string",
+          "enum": [
+            "number",
+            "string",
+            "boolean"
+          ],
+          "default": "string",
+          "description": "变量类型（单变量模式）"
+        }
+      }
+    },
+    "variable/var_math": {
+      "type": "variable/var_math",
+      "category": "variable",
+      "display_name": "数学运算",
+      "color": "#f97316",
+      "inputs": [
+        {
+          "name": "in",
+          "type": "flow"
+        },
+        {
+          "name": "A",
+          "type": "number"
+        },
+        {
+          "name": "B",
+          "type": "number"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "next",
+          "type": "flow"
+        },
+        {
+          "name": "result",
+          "type": "number"
+        }
+      ],
+      "params_schema": {
+        "op": {
+          "type": "string",
+          "enum": [
+            "add",
+            "sub",
+            "mul",
+            "div",
+            "mod",
+            "min",
+            "max",
+            "abs",
+            "round"
+          ],
+          "default": "add",
+          "description": "运算类型"
+        },
+        "a": {
+          "type": "string",
+          "default": "0",
+          "description": "操作数A(支持${var})"
+        },
+        "b": {
+          "type": "string",
+          "default": "0",
+          "description": "操作数B(支持${var})"
+        },
+        "store_var": {
+          "type": "string",
+          "default": "",
+          "description": "存储结果变量名"
+        }
+      }
+    },
+    "variable/var_compare": {
+      "type": "variable/var_compare",
+      "category": "variable",
+      "display_name": "比较",
+      "color": "#f97316",
+      "inputs": [
+        {
+          "name": "in",
+          "type": "flow"
+        },
+        {
+          "name": "A",
+          "type": "number"
+        },
+        {
+          "name": "B",
+          "type": "number"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "next",
+          "type": "flow"
+        },
+        {
+          "name": "result",
+          "type": "data_bool"
+        }
+      ],
+      "params_schema": {
+        "op": {
+          "type": "string",
+          "enum": [
+            "eq",
+            "ne",
+            "gt",
+            "lt",
+            "ge",
+            "le"
+          ],
+          "default": "gt",
+          "description": "比较运算"
+        },
+        "a": {
+          "type": "string",
+          "default": "0",
+          "description": "操作数A(支持${var})"
+        },
+        "b": {
+          "type": "string",
+          "default": "0",
+          "description": "操作数B(支持${var})"
+        }
+      }
+    },
+    "variable/var_string": {
+      "type": "variable/var_string",
+      "category": "variable",
+      "display_name": "字符串操作",
+      "color": "#f97316",
+      "inputs": [
+        {
+          "name": "in",
+          "type": "flow"
+        },
+        {
+          "name": "str",
+          "type": "string"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "next",
+          "type": "flow"
+        },
+        {
+          "name": "result",
+          "type": "string"
+        }
+      ],
+      "params_schema": {
+        "op": {
+          "type": "string",
+          "enum": [
+            "concat",
+            "substr",
+            "replace",
+            "split",
+            "regex_extract"
+          ],
+          "default": "concat",
+          "description": "操作类型"
+        },
+        "a": {
+          "type": "string",
+          "default": "",
+          "description": "字符串A(支持${var})"
+        },
+        "b": {
+          "type": "string",
+          "default": "",
+          "description": "字符串B(支持${var})"
+        },
+        "store_var": {
+          "type": "string",
+          "default": "",
+          "description": "存储结果变量名"
+        }
+      }
+    },
+    "variable/var_convert": {
+      "type": "variable/var_convert",
+      "category": "variable",
+      "display_name": "类型转换",
+      "color": "#f97316",
+      "inputs": [
+        {
+          "name": "in",
+          "type": "flow"
+        },
+        {
+          "name": "val",
+          "type": "any"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "next",
+          "type": "flow"
+        },
+        {
+          "name": "result",
+          "type": "any"
+        }
+      ],
+      "params_schema": {
+        "to_type": {
+          "type": "string",
+          "enum": [
+            "number",
+            "string",
+            "boolean"
+          ],
+          "default": "number",
+          "description": "目标类型"
+        },
+        "input_var": {
+          "type": "string",
+          "default": "",
+          "description": "输入变量名"
+        },
+        "store_var": {
+          "type": "string",
+          "default": "",
+          "description": "存储结果变量名"
+        }
+      }
+    },
+    "preset/preset_click": {
+      "type": "preset/preset_click",
+      "category": "preset",
+      "display_name": "点击坐标",
+      "color": "#f472b6",
+      "inputs": [
+        {
+          "name": "in",
+          "type": "flow"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "next",
+          "type": "flow"
+        }
+      ],
+      "params_schema": {
+        "mode": {
+          "type": "string",
+          "enum": [
+            "screen",
+            "window",
+            "relative"
+          ],
+          "default": "screen",
+          "description": "坐标模式"
+        },
+        "x": {
+          "type": "number",
+          "default": 960,
+          "description": "X坐标"
+        },
+        "y": {
+          "type": "number",
+          "default": 540,
+          "description": "Y坐标"
+        },
+        "hwnd_var": {
+          "type": "string",
+          "default": "",
+          "description": "窗口句柄变量名"
+        },
+        "button": {
+          "type": "string",
+          "enum": [
+            "left",
+            "right"
+          ],
+          "default": "left",
+          "description": "鼠标按键"
+        },
+        "move_duration": {
+          "type": "number",
+          "default": 150,
+          "description": "移动耗时（ms）"
+        }
+      }
+    },
+    "preset/preset_find_click": {
+      "type": "preset/preset_find_click",
+      "category": "preset",
+      "display_name": "找图点击",
+      "color": "#f472b6",
+      "inputs": [
+        {
+          "name": "in",
+          "type": "flow"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "found",
+          "type": "flow"
+        },
+        {
+          "name": "not_found",
+          "type": "flow"
+        }
+      ],
+      "params_schema": {
+        "mode": {
+          "type": "string",
+          "enum": [
+            "screen",
+            "window",
+            "relative"
+          ],
+          "default": "screen",
+          "description": "坐标模式"
+        },
+        "rect": {
+          "type": "array",
+          "format": "region",
+          "default": [
+            0,
+            0,
+            0,
+            0
+          ],
+          "description": "搜索区域，0=全屏"
+        },
+        "hwnd_var": {
+          "type": "string",
+          "default": "",
+          "description": "窗口句柄变量名"
+        },
+        "template_path": {
+          "type": "string",
+          "default": "",
+          "format": "path",
+          "description": "模板图片路径"
+        },
+        "threshold": {
+          "type": "number",
+          "default": 0.8,
+          "description": "匹配阈值(0-1)"
+        },
+        "button": {
+          "type": "string",
+          "enum": [
+            "left",
+            "right"
+          ],
+          "default": "left",
+          "description": "鼠标按键"
+        }
+      }
+    },
+    "preset/preset_read_text": {
+      "type": "preset/preset_read_text",
+      "category": "preset",
+      "display_name": "读取数字文本",
+      "color": "#f472b6",
+      "inputs": [
+        {
+          "name": "in",
+          "type": "flow"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "next",
+          "type": "flow"
+        }
+      ],
+      "params_schema": {
+        "mode": {
+          "type": "string",
+          "enum": [
+            "screen",
+            "window",
+            "relative"
+          ],
+          "default": "screen",
+          "description": "坐标模式"
+        },
+        "rect": {
+          "type": "array",
+          "format": "region",
+          "default": [
+            0,
+            0,
+            100,
+            30
+          ],
+          "description": "检测区域[x,y,w,h]"
+        },
+        "hwnd_var": {
+          "type": "string",
+          "default": "",
+          "description": "窗口句柄变量名"
+        },
+        "read_mode": {
+          "type": "string",
+          "enum": [
+            "all",
+            "number",
+            "text"
+          ],
+          "default": "all",
+          "description": "读取模式"
+        },
+        "engine": {
+          "type": "string",
+          "enum": [
+            "rapidocr"
+          ],
+          "default": "rapidocr",
+          "description": "OCR引擎"
+        },
+        "store_var": {
+          "type": "string",
+          "default": "",
+          "description": "存入变量名"
+        }
+      }
+    },
+    "utility/const_number": {
+      "type": "utility/const_number",
+      "category": "utility",
+      "display_name": "数字常量",
+      "color": "#d8d8d8ff",
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "value",
+          "type": "number"
+        }
+      ],
+      "params_schema": {
+        "value": {
+          "type": "number",
+          "default": 0,
+          "description": "常量值"
+        }
+      }
+    },
+    "utility/const_string": {
+      "type": "utility/const_string",
+      "category": "utility",
+      "display_name": "字符串常量",
+      "color": "#d8d8d8ff",
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "value",
+          "type": "string"
+        }
+      ],
+      "params_schema": {
+        "value": {
+          "type": "string",
+          "default": "",
+          "description": "常量字符串"
+        }
+      }
+    },
+    "utility/const_bool": {
+      "type": "utility/const_bool",
+      "category": "utility",
+      "display_name": "布尔常量",
+      "color": "#d8d8d8ff",
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "value",
+          "type": "boolean"
+        }
+      ],
+      "params_schema": {
+        "value": {
+          "type": "bool",
+          "default": true,
+          "description": "布尔值"
+        }
+      }
+    },
+    "utility/math_op": {
+      "type": "utility/math_op",
+      "category": "utility",
+      "display_name": "数学运算",
+      "color": "#d8d8d8ff",
+      "inputs": [
+        {
+          "name": "A",
+          "type": "number"
+        },
+        {
+          "name": "B",
+          "type": "number"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "result",
+          "type": "number"
+        }
+      ],
+      "params_schema": {
+        "op": {
+          "type": "string",
+          "enum": [
+            "add",
+            "sub",
+            "mul",
+            "div",
+            "mod",
+            "pow",
+            "min",
+            "max"
+          ],
+          "default": "add",
+          "description": "运算符"
+        },
+        "a": {
+          "type": "number",
+          "default": 0,
+          "description": "输入A"
+        },
+        "b": {
+          "type": "number",
+          "default": 0,
+          "description": "输入B"
+        }
+      }
+    },
+    "utility/math_func": {
+      "type": "utility/math_func",
+      "category": "utility",
+      "display_name": "数学函数",
+      "color": "#d8d8d8ff",
+      "inputs": [
+        {
+          "name": "x",
+          "type": "number"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "result",
+          "type": "number"
+        }
+      ],
+      "params_schema": {
+        "func": {
+          "type": "string",
+          "enum": [
+            "abs",
+            "round",
+            "floor",
+            "ceil",
+            "sqrt",
+            "sin",
+            "cos",
+            "log",
+            "negate"
+          ],
+          "default": "abs",
+          "description": "函数"
+        },
+        "x": {
+          "type": "number",
+          "default": 0,
+          "description": "输入值"
+        }
+      }
+    },
+    "utility/logic_op": {
+      "type": "utility/logic_op",
+      "category": "utility",
+      "display_name": "逻辑运算",
+      "color": "#d8d8d8ff",
+      "inputs": [
+        {
+          "name": "A",
+          "type": "boolean"
+        },
+        {
+          "name": "B",
+          "type": "boolean"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "result",
+          "type": "boolean"
+        }
+      ],
+      "params_schema": {
+        "op": {
+          "type": "string",
+          "enum": [
+            "and",
+            "or",
+            "xor",
+            "not",
+            "nand",
+            "nor"
+          ],
+          "default": "and",
+          "description": "逻辑运算"
+        },
+        "a": {
+          "type": "bool",
+          "default": true,
+          "description": "输入A"
+        },
+        "b": {
+          "type": "bool",
+          "default": true,
+          "description": "输入B"
+        }
+      }
+    },
+    "utility/compare": {
+      "type": "utility/compare",
+      "category": "utility",
+      "display_name": "数值比较",
+      "color": "#d8d8d8ff",
+      "inputs": [
+        {
+          "name": "A",
+          "type": "number"
+        },
+        {
+          "name": "B",
+          "type": "number"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "result",
+          "type": "boolean"
+        }
+      ],
+      "params_schema": {
+        "op": {
+          "type": "string",
+          "enum": [
+            "eq",
+            "ne",
+            "gt",
+            "lt",
+            "ge",
+            "le"
+          ],
+          "default": "gt",
+          "description": "比较运算符"
+        },
+        "a": {
+          "type": "number",
+          "default": 0,
+          "description": "输入A"
+        },
+        "b": {
+          "type": "number",
+          "default": 0,
+          "description": "输入B"
+        }
+      }
+    },
+    "utility/string_op": {
+      "type": "utility/string_op",
+      "category": "utility",
+      "display_name": "字符串操作",
+      "color": "#d8d8d8ff",
+      "inputs": [
+        {
+          "name": "str",
+          "type": "string"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "result",
+          "type": "string"
+        }
+      ],
+      "params_schema": {
+        "op": {
+          "type": "string",
+          "enum": [
+            "concat",
+            "replace",
+            "upper",
+            "lower",
+            "trim",
+            "substring",
+            "split_index"
+          ],
+          "default": "concat",
+          "description": "操作类型"
+        },
+        "input_str": {
+          "type": "string",
+          "default": "",
+          "description": "输入字符串"
+        },
+        "param_a": {
+          "type": "string",
+          "default": "",
+          "description": "参数A"
+        },
+        "param_b": {
+          "type": "string",
+          "default": "",
+          "description": "参数B"
+        },
+        "param_c": {
+          "type": "string",
+          "default": "",
+          "description": "参数C"
+        }
+      }
+    },
+    "utility/condition": {
+      "type": "utility/condition",
+      "category": "utility",
+      "display_name": "条件选择",
+      "color": "#d8d8d8ff",
+      "inputs": [
+        {
+          "name": "cond",
+          "type": "boolean"
+        },
+        {
+          "name": "if_true",
+          "type": "any"
+        },
+        {
+          "name": "if_false",
+          "type": "any"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "result",
+          "type": "any"
+        }
+      ],
+      "params_schema": {
+        "cond_var": {
+          "type": "string",
+          "default": "",
+          "description": "条件变量名"
+        },
+        "true_val": {
+          "type": "string",
+          "default": "",
+          "description": "为真时的值"
+        },
+        "false_val": {
+          "type": "string",
+          "default": "",
+          "description": "为假时的值"
+        }
+      }
+    },
+    "utility/delay": {
+      "type": "utility/delay",
+      "category": "utility",
+      "display_name": "延迟",
+      "color": "#d8d8d8ff",
+      "inputs": [
+        {
+          "name": "in",
+          "type": "flow"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "next",
+          "type": "flow"
+        }
+      ],
+      "params_schema": {
+        "ms": {
+          "type": "number",
+          "default": 1000,
+          "description": "延迟时间（ms）"
+        }
+      }
+    },
+    "utility/bookmark": {
+      "type": "utility/bookmark",
+      "category": "utility",
+      "display_name": "坐标书签",
+      "color": "#d8d8d8ff",
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "x",
+          "type": "number"
+        },
+        {
+          "name": "y",
+          "type": "number"
+        },
+        {
+          "name": "w",
+          "type": "number"
+        },
+        {
+          "name": "h",
+          "type": "number"
+        }
+      ],
+      "params_schema": {
+        "name": {
+          "type": "string",
+          "default": "",
+          "description": "书签名称"
+        },
+        "mode": {
+          "type": "enum",
+          "default": "screen",
+          "options": [
+            "screen",
+            "window",
+            "relative"
+          ],
+          "description": "坐标模式"
+        },
+        "x": {
+          "type": "number",
+          "default": 0,
+          "description": "X坐标"
+        },
+        "y": {
+          "type": "number",
+          "default": 0,
+          "description": "Y坐标"
+        },
+        "w": {
+          "type": "number",
+          "default": 0,
+          "description": "宽度"
+        },
+        "h": {
+          "type": "number",
+          "default": 0,
+          "description": "高度"
+        },
+        "hwnd_var": {
+          "type": "string",
+          "default": "",
+          "description": "窗口句柄变量"
+        },
+        "remark": {
+          "type": "string",
+          "default": "",
+          "description": "备注"
+        }
+      }
+    },
+    "monitor/monitor_color": {
+      "type": "monitor/monitor_color",
+      "category": "monitor",
+      "display_name": "颜色监视",
+      "color": "#06b6d4",
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "trigger",
+          "type": "flow"
+        },
+        {
+          "name": "timeout",
+          "type": "flow"
+        }
+      ],
+      "params_schema": {
+        "mode": {
+          "type": "string",
+          "enum": [
+            "screen",
+            "window",
+            "relative"
+          ],
+          "default": "screen",
+          "description": "坐标模式"
+        },
+        "rect": {
+          "type": "array",
+          "format": "region",
+          "default": [
+            0,
+            0,
+            10,
+            10
+          ],
+          "description": "检测区域[x,y,w,h]"
+        },
+        "hwnd_var": {
+          "type": "string",
+          "default": "",
+          "description": "窗口句柄变量名"
+        },
+        "target_color": {
+          "type": "string",
+          "default": "#FF0000",
+          "format": "color",
+          "description": "目标颜色"
+        },
+        "tolerance": {
+          "type": "number",
+          "default": 10,
+          "description": "容差(0-255)"
+        },
+        "interval": {
+          "type": "number",
+          "default": 100,
+          "description": "检测间隔（ms）"
+        },
+        "timeout": {
+          "type": "number",
+          "default": 0,
+          "description": "超时（ms, 0=无限）"
+        },
+        "trigger_mode": {
+          "type": "string",
+          "enum": [
+            "appear",
+            "disappear",
+            "change"
+          ],
+          "default": "appear",
+          "description": "触发模式"
+        },
+        "on_trigger": {
+          "type": "string",
+          "enum": [
+            "branch",
+            "stop_all",
+            "stop_task",
+            "pause_task"
+          ],
+          "default": "branch",
+          "description": "触发行为"
+        },
+        "target_task": {
+          "type": "string",
+          "default": "",
+          "description": "目标任务ID",
+          "showWhen": "on_trigger=stop_task,pause_task"
+        },
+        "auto_stop": {
+          "type": "boolean",
+          "default": true,
+          "description": "触发后是否自动停止此监视器"
+        }
+      }
+    },
+    "monitor/monitor_ocr": {
+      "type": "monitor/monitor_ocr",
+      "category": "monitor",
+      "display_name": "OCR监视",
+      "color": "#06b6d4",
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "trigger",
+          "type": "flow"
+        },
+        {
+          "name": "timeout",
+          "type": "flow"
+        }
+      ],
+      "params_schema": {
+        "mode": {
+          "type": "string",
+          "enum": [
+            "screen",
+            "window",
+            "relative"
+          ],
+          "default": "screen",
+          "description": "坐标模式"
+        },
+        "rect": {
+          "type": "array",
+          "format": "region",
+          "default": [
+            0,
+            0,
+            100,
+            30
+          ],
+          "description": "检测区域[x,y,w,h]"
+        },
+        "hwnd_var": {
+          "type": "string",
+          "default": "",
+          "description": "窗口句柄变量名"
+        },
+        "match_text": {
+          "type": "string",
+          "default": "",
+          "description": "匹配文本"
+        },
+        "match_mode": {
+          "type": "string",
+          "enum": [
+            "contain",
+            "exact",
+            "regex",
+            "number_gt",
+            "number_lt",
+            "number_eq"
+          ],
+          "default": "contain",
+          "description": "匹配模式"
+        },
+        "match_number": {
+          "type": "number",
+          "default": 0,
+          "description": "比较数值",
+          "showWhen": "match_mode=number_gt,number_lt,number_eq"
+        },
+        "engine": {
+          "type": "string",
+          "enum": [
+            "rapidocr"
+          ],
+          "default": "rapidocr",
+          "description": "OCR引擎"
+        },
+        "interval": {
+          "type": "number",
+          "default": 200,
+          "description": "检测间隔（ms）"
+        },
+        "timeout": {
+          "type": "number",
+          "default": 0,
+          "description": "超时（ms, 0=无限）"
+        },
+        "on_trigger": {
+          "type": "string",
+          "enum": [
+            "branch",
+            "stop_all",
+            "stop_task",
+            "pause_task"
+          ],
+          "default": "branch",
+          "description": "触发行为"
+        },
+        "target_task": {
+          "type": "string",
+          "default": "",
+          "description": "目标任务ID",
+          "showWhen": "on_trigger=stop_task,pause_task"
+        },
+        "auto_stop": {
+          "type": "boolean",
+          "default": true,
+          "description": "触发后是否自动停止此监视器"
+        },
+        "store_var": {
+          "type": "string",
+          "default": "",
+          "description": "存储识别到的原始文本"
+        },
+        "store_number": {
+          "type": "string",
+          "default": "",
+          "description": "存储提取的数字值"
+        }
+      }
+    },
+    "monitor/monitor_timer": {
+      "type": "monitor/monitor_timer",
+      "category": "monitor",
+      "display_name": "定时器",
+      "color": "#06b6d4",
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "trigger",
+          "type": "flow"
+        }
+      ],
+      "params_schema": {
+        "interval": {
+          "type": "number",
+          "default": 1000,
+          "description": "触发间隔（ms）"
+        },
+        "repeat_count": {
+          "type": "number",
+          "default": 0,
+          "description": "重复次数（0=无限）"
+        },
+        "on_trigger": {
+          "type": "string",
+          "enum": [
+            "branch",
+            "stop_all",
+            "stop_task",
+            "pause_task"
+          ],
+          "default": "branch",
+          "description": "触发行为"
+        }
+      }
+    },
+    "flow/start": {
+      "type": "flow/start",
+      "category": "flow",
+      "display_name": "开始",
+      "color": "#99ff00ff",
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "next",
+          "type": "flow"
+        }
+      ],
+      "params_schema": {}
+    },
+    "flow/end": {
+      "type": "flow/end",
+      "category": "flow",
+      "display_name": "结束",
+      "color": "#ef4444",
+      "inputs": [
+        {
+          "name": "in",
+          "type": "flow"
+        }
+      ],
+      "outputs": [],
+      "params_schema": {}
+    }
+  },
+  "engines": []
+}

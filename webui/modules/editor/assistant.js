@@ -51,9 +51,9 @@ export function bindMacroAssistant() {
     title: '宏编辑保存',
     emptyTitle: '这次想写什么宏？',
     examples: [
-      ['新建快捷键宏', '生成一个 Ctrl+S 组合键，松开后等待 300 ms。', 'new'],
-      ['修改选中的动作', '把选中的动作改成等待 80 ms。', 'selection'],
-      ['检查按键配对', '检查当前宏里有没有漏松的键，指出对应动作。', 'current'],
+      ['新建快捷键宏', '在末尾添加一个 Ctrl+S 组合键，松开后等待 300 ms。'],
+      ['修改选中的动作', '把选中的动作改成等待 80 ms。'],
+      ['检查按键配对', '检查当前宏里有没有漏松的键，指出对应动作。'],
     ],
     applyLabel: '应用到动作列表',
     placeholder: '例如，让 Ctrl+S 按下 80 毫秒，松开后等一秒。',
@@ -63,21 +63,22 @@ export function bindMacroAssistant() {
       ['selection', '选中的动作'],
     ],
     snapshot() {
-      // 宏组只是编辑期的抽屉：给 AI 看的是摊平后的、引擎真的能跑的 rows
-      return { path: state.selectedMacro, rows: flattenGroups(state.editorRows) };
+      return { path: state.selectedMacro, rows: cloneAction(state.editorRows) };
     },
-    attach(scope, snapshot) {
-      if (scope === 'selection') {
-        const row = getActionAtPath(state.selectedActionPath);
-        if (!row || state.selectedLineKind !== 'action') throw new Error('请先选中一个动作。');
+    attach(snapshot) {
+      const data = { current: flattenGroups(snapshot.rows) };
+      const row = getActionAtPath(state.selectedActionPath);
+      if (row && state.selectedLineKind === 'action') {
         const flat = flattenGroups([cloneAction(row)]);
-        if (!flat.length) throw new Error('选中的宏组里还没有动作。');
-        return { data: flat, path: [...state.selectedActionPath] };
+        if (flat.length) {
+          data.selection = flat;
+          return { data, path: [...state.selectedActionPath] };
+        }
       }
-      return { data: scope === 'current' ? snapshot.rows : null };
+      return { data };
     },
-    sameSelection(attached) {
-      return !attached.path || state.selectedLineKind === 'action' &&
+    sameSelection(attached, scope) {
+      return scope !== 'selection' || state.selectedLineKind === 'action' &&
         JSON.stringify(attached.path) === JSON.stringify(state.selectedActionPath);
     },
     propose(reply, before, attached, scope) {

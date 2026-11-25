@@ -1,3 +1,5 @@
+import { iconEl } from './core/icons.js';
+
 const collapsedByView = new Map();
 
 function ensureCollapsedSet(viewId) {
@@ -75,6 +77,14 @@ export function renderMacroTreeList({
 
   container.innerHTML = '';
 
+  if (!rows.length) {
+    const empty = document.createElement('li');
+    empty.className = 'macro-tree-empty';
+    empty.textContent = '没有匹配的宏文件';
+    container.appendChild(empty);
+    return;
+  }
+
   rows.forEach((row) => {
     const li = document.createElement('li');
     li.classList.add('macro-tree-row');
@@ -90,7 +100,7 @@ export function renderMacroTreeList({
       const toggle = document.createElement('button');
       toggle.type = 'button';
       toggle.className = 'macro-tree-toggle';
-      toggle.textContent = row.collapsed ? '▶' : '▼';
+      toggle.appendChild(iconEl(row.collapsed ? 'chevRight' : 'chevDown', 12));
       toggle.addEventListener('click', (e) => {
         e.stopPropagation();
         if (collapsedSet.has(row.path)) {
@@ -109,25 +119,25 @@ export function renderMacroTreeList({
         });
       });
 
+      const folderIcon = iconEl('folder', 14, 'macro-tree-folder-icon');
       const name = document.createElement('span');
       name.className = 'macro-tree-name';
       name.textContent = row.name;
 
-      content.appendChild(toggle);
-      content.appendChild(name);
+      content.append(toggle, folderIcon, name);
+      li.addEventListener('click', () => toggle.click());
       li.appendChild(content);
       container.appendChild(li);
       return;
     }
 
-    const dot = document.createElement('span');
-    dot.className = 'macro-tree-file-dot';
-    dot.textContent = '•';
-    content.appendChild(dot);
+    const fileIcon = iconEl('file', 13, 'macro-tree-file-icon');
+    content.appendChild(fileIcon);
 
     const name = document.createElement('span');
     name.className = 'macro-tree-name';
-    name.textContent = row.path;
+    name.textContent = row.name || row.path;
+    name.title = row.path;
     content.appendChild(name);
 
     li.classList.toggle('active', row.path === selectedPath);

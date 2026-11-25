@@ -1,45 +1,43 @@
-# 本机宏、截图模板、录制与软件状态
-/宏/
-/录制宏/
-/自动化脚本/
-/图片模板/
-/输出/
-/output/
-/appdata/
-/logs/
-/webui_*.json
-*.auto.json
-*.log
+# Build & local toolchain overrides (may contain user-local paths)
+/target/
+.cargo/config.toml
+**/*.rs.bk
+*.pdb
 
-# 本机凭据和配置
+# Binaries, native drivers, installers & third-party runtime drops
+*.exe
+*.dll
+*.lib
+*.sys
+*.msi
+*.lnk
+Interception/
+
+# User macros, scripts, image templates, outputs & logs
+宏/
+自动化脚本/
+图片模板/
+输出/
+output/
+appdata/
+logs/
+
+# User runtime configuration & local secrets
+webui_*.json
 .env
 .env.*
 *.pem
 *.key
 *.pfx
 *.p12
-*.kdbx
+*.sqlite3*
+*.db
 
-# 本机安装的第三方驱动
-/Interception/
-*.dll
-*.exe
-*.sys
-*.lib
-*.msi
-*.lnk
+# Copyrighted / non-redistributable local source artwork
+webui/assets/icon-source.png
 
-# Python 和开发临时文件
-/.venv/
-/venv/
-__pycache__/
-*.py[cod]
-/.pytest_cache/
-/.playwright-cli/
-/_work/
-/_preview/
-/build/
-/dist/
-*.egg-info/
-*.bak
+# Editor / OS temp artifacts
 *.tmp
+*.bak
+.DS_Store
+Thumbs.db

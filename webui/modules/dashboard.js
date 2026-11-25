@@ -4,11 +4,26 @@ import { apiCall } from './core/api.js';
 export async function refreshSnapshot() {
   try {
     const data = await apiCall('get_dashboard_snapshot');
-    q('#statActive').textContent = String(data.active_macros || 0);
+    const activeCount = Number(data.active_macros || 0);
+    const statActive = q('#statActive');
+    if (statActive) statActive.textContent = String(activeCount);
+    const chipActive = q('#chipActive');
+    if (chipActive) chipActive.classList.toggle('is-live', activeCount > 0);
 
     const rec = data.recording || {};
-    q('#statRec').textContent = rec.is_recording ? '录制中' : rec.is_armed ? '已布防' : '空闲';
-    q('#statRecCount').textContent = `${rec.action_count || 0} / ${rec.track_count || 0}`;
+    const statRec = q('#statRec');
+    if (statRec) {
+      statRec.textContent = rec.is_recording ? '录制中' : rec.is_armed ? '已布防' : '空闲';
+    }
+    const chipRec = q('#chipRec');
+    if (chipRec) {
+      chipRec.classList.toggle('is-recording', Boolean(rec.is_recording));
+      chipRec.classList.toggle('is-armed', Boolean(!rec.is_recording && rec.is_armed));
+    }
+    const statRecCount = q('#statRecCount');
+    if (statRecCount) {
+      statRecCount.textContent = `${rec.action_count || 0} / ${rec.track_count || 0}`;
+    }
   } catch (err) {
     console.error(err);
   }
@@ -21,15 +36,45 @@ export async function refreshListenerButtonState() {
     const starting = Boolean(data.starting);
     const paused = Boolean(data.paused);
     const error = String(data.error || '');
-    const listenerButton = q('#btnStartListeners');
-    listenerButton.textContent = starting ? '正在启动全局监听…' : running ? '关闭全局宏监听' : '启动全局宏监听';
-    listenerButton.disabled = starting;
-    q('#statPaused').textContent = paused ? '是' : '否';
-    const pauseButton = q('#btnGlobalPause');
-    pauseButton.textContent = paused ? '解除全局暂停' : '全局暂停';
-    pauseButton.setAttribute('aria-pressed', String(paused));
 
-    // 「现有绑定」旁边那颗状态徽标：没开监听时热键按下去是完全没有反应的
+    const listenerButton = q('#btnStartListeners');
+    if (listenerButton) {
+      listenerButton.textContent = starting ? '正在启动监听…' : running ? '关闭全局监听' : '启动全局监听';
+      listenerButton.disabled = starting;
+      listenerButton.classList.toggle('is-running', running && !paused);
+    }
+
+    const statusDot = q('#listenerStatusDot');
+    const statusText = q('#listenerStatusText');
+    if (statusDot) {
+      statusDot.className = 'status-dot ' + (
+        starting ? 'starting'
+          : error && !running ? 'error'
+            : running && paused ? 'paused'
+              : running ? 'on'
+                : 'off'
+      );
+    }
+    if (statusText) {
+      statusText.textContent = starting ? '正在启动监听…'
+        : error && !running ? '监听启动异常'
+          : running && paused ? '全局热键已暂停'
+            : running ? '全局监听生效中'
+              : '全局监听未启动';
+    }
+
+    const statPaused = q('#statPaused');
+    if (statPaused) statPaused.textContent = paused ? '是' : '否';
+    const chipPaused = q('#chipPaused');
+    if (chipPaused) chipPaused.classList.toggle('is-paused', paused);
+
+    const pauseButton = q('#btnGlobalPause');
+    if (pauseButton) {
+      pauseButton.textContent = paused ? '解除暂停' : '全局暂停';
+      pauseButton.setAttribute('aria-pressed', String(paused));
+      pauseButton.classList.toggle('is-paused', paused);
+    }
+
     const badge = q('#bindingListenBadge');
     if (badge) {
       badge.disabled = starting;

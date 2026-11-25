@@ -1,54 +1,70 @@
 /* ═══════════════════════════════════════════════════════════════════════
-   宏锻控制台 · 设计令牌 —— 移植自本地 XMBC 拼宏编辑器（theme.css）
-   三套主题，一套命名。所有主题发布同名变量：
-     画布:   --background / --foreground
-     表面:   --card / --card-foreground, --popover, --secondary,
-             --muted / --muted-foreground, --accent, --surface-raised
-     动作:   --primary / --primary-foreground, --destructive, --ring
-     结构:   --border / --input / --overlay / --shadow-raised
-     状态:   --success / --warning / --info (+ -surface 变体)
-   兼容别名：旧 styles.css 使用的 --bg/--text/--muted/--line/--accent/
-   --danger/--warn 全部指向新令牌，一处换主题，全站生效。
+   SuperFaye Macro · Unified Design System Tokens
+   Three curated themes:
+     - black (Obsidian Studio · Precision Dark)
+     - snow  (Crisp Studio · Cool Light)
+     - cream (Warm Paper · Editorial Light)
    ═══════════════════════════════════════════════════════════════════════ */
 
-/* 纸质 Cream —— 暖白画布 + 陶土橙主色（默认） */
+:root {
+  --font-sans: "Segoe UI Variable Text", "Segoe UI", "PingFang SC",
+    "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans SC", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", "Cascadia Mono", "Cascadia Code", Consolas,
+    "Noto Sans Mono", ui-monospace, monospace;
+
+  --motion-fast: 120ms;
+  --motion-base: 180ms;
+  --motion-slow: 240ms;
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-pop: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+
+  --radius-panel: 14px;
+  --radius-card: 12px;
+  --radius-control: 8px;
+  --radius-pill: 999px;
+}
+
+/* ── Warm Paper (cream) ──────────────────────────────────────────────── */
 :root {
   color-scheme: light;
-  --background: #fdfcf9;
-  --foreground: #1c1816;
+  --background: #f5f2eb;
+  --foreground: #1c1917;
   --card: #ffffff;
-  --card-foreground: #1c1816;
+  --card-foreground: #1c1917;
   --popover: #ffffff;
-  --popover-foreground: #1c1816;
-  --primary: #b0501e;
+  --popover-foreground: #1c1917;
+  --primary: #c25521;
   --primary-foreground: #ffffff;
-  --secondary: #f5f2ea;
-  --secondary-foreground: #1c1816;
-  --muted: #f1ede2;
-  --muted-foreground: #6d645a;
-  --accent: #ece7d8;
-  --accent-foreground: #1c1816;
+  --secondary: #efebe2;
+  --secondary-foreground: #292524;
+  --muted: #e6e0d4;
+  --muted-foreground: #6e655b;
+  --accent: #ddd5c5;
+  --accent-foreground: #1c1917;
   --destructive: #c53a2c;
   --destructive-foreground: #ffffff;
-  --border: #e6decc;
-  --input: #e6decc;
-  --ring: #b0501e;
-  --overlay: rgba(28, 24, 22, 0.42);
-  --success: #237a4b;
-  --success-surface: #ecf8f0;
-  --warning: #a15c00;
-  --warning-surface: #fff7df;
+  --border: #e2dacb;
+  --input: #d6cdbc;
+  --ring: #c25521;
+  --overlay: rgba(28, 24, 22, 0.48);
+  --success: #1f7a4c;
+  --success-surface: #eaf7f0;
+  --warning: #b45309;
+  --warning-surface: #fef5e2;
   --info: #2563eb;
   --info-surface: #eff6ff;
   --surface-raised: #ffffff;
-  --shadow-raised: 0 16px 40px rgba(69, 49, 31, 0.12);
+  --switch-knob-off: #ffffff;
+  --shadow-sm: 0 1px 2px rgba(45, 34, 22, 0.05);
+  --shadow-raised: 0 18px 42px rgba(45, 34, 22, 0.14);
 
-  /* ── 旧变量别名（兼容既有引用） ── */
+  /* Semantic aliases (note: never overwrite --muted!) */
   --bg: var(--background);
   --bg-soft: var(--secondary);
   --card-light: var(--surface-raised);
   --text: var(--foreground);
-  --muted: var(--muted-foreground);
   --line: var(--border);
   --accent-strong: var(--primary);
   --danger: var(--destructive);
@@ -56,40 +72,41 @@
   --shadow: var(--shadow-raised);
 }
 
-/* 简约 Snow —— 纯白中性画布 + 蓝主色 */
+/* ── Crisp Studio (snow) ─────────────────────────────────────────────── */
 html[data-theme="snow"] {
   color-scheme: light;
-  --background: #ffffff;
-  --foreground: #0d0d0d;
+  --background: #f2f4f8;
+  --foreground: #0f172a;
   --card: #ffffff;
-  --card-foreground: #0d0d0d;
+  --card-foreground: #0f172a;
   --popover: #ffffff;
-  --popover-foreground: #0d0d0d;
+  --popover-foreground: #0f172a;
   --primary: #2563eb;
   --primary-foreground: #ffffff;
-  --secondary: #f7f7f7;
-  --secondary-foreground: #0d0d0d;
-  --muted: #f2f2f2;
-  --muted-foreground: #6e6e6e;
-  --accent: #ececec;
-  --accent-foreground: #0d0d0d;
-  --destructive: #d92d20;
+  --secondary: #edf0f5;
+  --secondary-foreground: #1e293b;
+  --muted: #e4e9f2;
+  --muted-foreground: #64748b;
+  --accent: #dbe3ef;
+  --accent-foreground: #0f172a;
+  --destructive: #dc2626;
   --destructive-foreground: #ffffff;
-  --border: #e5e5e5;
-  --input: #e5e5e5;
+  --border: #dce2ec;
+  --input: #cfd7e4;
   --ring: #2563eb;
-  --overlay: rgba(0, 0, 0, 0.4);
-  --success: #16794b;
+  --overlay: rgba(15, 23, 42, 0.42);
+  --success: #16a34a;
   --success-surface: #ecfdf3;
-  --warning: #a15c00;
-  --warning-surface: #fffaeb;
-  --info: #2563eb;
-  --info-surface: #eff6ff;
+  --warning: #d97706;
+  --warning-surface: #fffbeb;
+  --info: #0284c7;
+  --info-surface: #f0f9ff;
   --surface-raised: #ffffff;
-  --shadow-raised: 0 16px 40px rgba(13, 13, 13, 0.12);
+  --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.05);
+  --shadow-raised: 0 18px 42px rgba(15, 23, 42, 0.12);
 }
 
-/* 纯黑 Black —— OLED 全黑 + 白主色，无任何色染（Vercel/Linear 黑） */
+/* ── 纯黑主题 (black · OLED Pure Black，无任何色染) ────────────────────── */
 html[data-theme="black"] {
   color-scheme: dark;
   --background: #000000;
@@ -101,42 +118,27 @@ html[data-theme="black"] {
   --primary: #ffffff;
   --primary-foreground: #000000;
   --secondary: #141414;
-  --secondary-foreground: #e8e8e8;
-  --muted: #1a1a1a;
-  --muted-foreground: #9d9d9d;
-  --accent: #222222;
+  --secondary-foreground: #e5e5e5;
+  --muted: #1c1c1c;
+  --muted-foreground: #9a9a9a;
+  --accent: #242424;
   --accent-foreground: #ffffff;
   --destructive: #e5484d;
   --destructive-foreground: #ffffff;
   --border: #262626;
-  --input: #262626;
+  --input: #2b2b2b;
   --ring: #ffffff;
-  --overlay: rgba(0, 0, 0, 0.7);
-  --success: #5fd08a;
-  --success-surface: #0e2a1c;
-  --warning: #f2b84b;
-  --warning-surface: #2e2412;
-  --info: #7ba7ff;
-  --info-surface: #101c33;
+  --overlay: rgba(0, 0, 0, 0.72);
+  --success: #3fb975;
+  --success-surface: #0d2618;
+  --warning: #eab308;
+  --warning-surface: #271f0a;
+  --info: #60a5fa;
+  --info-surface: #111d30;
   --surface-raised: #141414;
-  --shadow-raised: 0 16px 44px rgba(0, 0, 0, 0.55);
-}
-
-/* ── 字体与动效节奏（与拼宏编辑器同一套） ─────────────────────────── */
-:root {
-  --font-sans: "Segoe UI Variable Text", "Segoe UI", Inter, "PingFang SC",
-    "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans SC", system-ui, sans-serif;
-  --font-mono: ui-monospace, "Cascadia Mono", "Cascadia Code", Consolas,
-    "JetBrains Mono", "Noto Sans Mono", monospace;
-  --motion-fast: 120ms;
-  --motion-base: 180ms;
-  --motion-slow: 240ms;
-  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
-  --ease-pop: cubic-bezier(0.22, 1, 0.36, 1);
-  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
-  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
-  --radius-panel: 16px;
-  --radius-control: 10px;
+  --switch-knob-off: #d4d4d4;
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.45);
+  --shadow-raised: 0 20px 48px rgba(0, 0, 0, 0.72);
 }
 
 * { box-sizing: border-box; }
@@ -146,41 +148,40 @@ html[data-theme="black"] {
   outline-offset: 2px;
 }
 
-/* ── 主题色点组（右上角三圆点，拼宏编辑器同款） ─────────────────── */
+/* ── 主题切换器 ──────────────────────────────────────────────────────── */
 .swatches {
-  display: flex;
+  display: inline-flex;
   align-items: center;
   gap: 5px;
-  padding: 3px;
+  padding: 4px 6px;
   border: 1px solid var(--border);
   border-radius: 999px;
   background: var(--secondary);
 }
 
 .sw {
-  width: 20px;
-  height: 20px;
+  width: 18px;
+  height: 18px;
   min-height: 0;
   padding: 0;
   border-radius: 999px;
   border: 1px solid var(--border);
-  background: radial-gradient(circle at 50% 50%, var(--sw-accent) 0 3px, var(--sw-canvas) 3.5px);
+  background: radial-gradient(circle at 50% 50%, var(--sw-accent) 0 3.2px, var(--sw-canvas) 3.8px);
   cursor: pointer;
   transition: box-shadow var(--motion-base) var(--ease-standard),
-    transform var(--motion-base) var(--ease-spring),
-    background-color var(--motion-fast) var(--ease-standard);
+    transform var(--motion-base) var(--ease-spring);
 }
 .sw:hover {
   transform: scale(1.14);
 }
 .sw[aria-pressed="true"] {
-  box-shadow: 0 0 0 2px var(--background), 0 0 0 4px var(--ring);
+  box-shadow: 0 0 0 2px var(--card), 0 0 0 3.5px var(--ring);
 }
-.sw[data-theme-set="cream"] { --sw-canvas: #fdfcf9; --sw-accent: #b0501e; }
-.sw[data-theme-set="snow"]  { --sw-canvas: #ffffff; --sw-accent: #2563eb; }
 .sw[data-theme-set="black"] { --sw-canvas: #000000; --sw-accent: #ffffff; }
+.sw[data-theme-set="snow"]  { --sw-canvas: #ffffff; --sw-accent: #2563eb; }
+.sw[data-theme-set="cream"] { --sw-canvas: #f5f2eb; --sw-accent: #c25521; }
 
-/* ── 主题切换时整套配色交叉淡入，不硬切 ─────────────────────────── */
+/* ── 主题切换过渡 ────────────────────────────────────────────────────── */
 html.theme-anim,
 html.theme-anim body,
 html.theme-anim .sidebar,
@@ -195,8 +196,8 @@ html.theme-anim select,
 html.theme-anim textarea,
 html.theme-anim .toast,
 html.theme-anim .console,
-html.theme-anim .param-group,
-html.theme-anim .param-item,
+html.theme-anim .param-group-card,
+html.theme-anim .param-row,
 html.theme-anim .switch-slider,
 html.theme-anim .swatches {
   transition: background-color var(--motion-slow) ease,
@@ -212,5 +213,3 @@ html.theme-anim .swatches {
     transition-duration: 0.01ms !important;
   }
 }
-
-/* 防主题闪烁：head 内联脚本已提前设 data-theme，无需额外处理 */

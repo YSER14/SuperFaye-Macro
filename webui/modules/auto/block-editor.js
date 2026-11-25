@@ -90,7 +90,7 @@
             var header = document.createElement('div');
             header.className = 'modal-header';
             var pathLabel = node.properties.path || '未选择文件';
-            header.innerHTML = '<span><i class="fa-solid fa-pen-to-square" style="margin-right:6px"></i>编辑动作块：' + pathLabel + '</span>';
+            header.innerHTML = '<span><i class="fa-solid fa-pen-to-square" style="margin-right:6px"></i>编辑动作块：' + (typeof _escapeHtml === 'function' ? _escapeHtml(pathLabel) : String(pathLabel).replace(/[&<>"']/g, function(c) { return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; })) + '</span>';
             var closeBtn = document.createElement('button');
             closeBtn.className = 'modal-close';
             closeBtn.innerHTML = '<i class="fa-solid fa-xmark"></i>';
@@ -287,7 +287,9 @@
 
             var header = document.createElement('div');
             header.className = 'modal-header';
-            header.innerHTML = '<span>编辑动作 #' + (idx + 1) + '：' + actionDef.label + '</span>';
+            var headerLabel = document.createElement('span');
+            headerLabel.textContent = '编辑动作 #' + (idx + 1) + '：' + (actionDef.label || '');
+            header.appendChild(headerLabel);
             var closeBtn = document.createElement('button');
             closeBtn.className = 'modal-close';
             closeBtn.innerHTML = '<i class="fa-solid fa-xmark"></i>';

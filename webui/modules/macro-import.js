@@ -1,24 +1,26 @@
-// 导入现成宏：把一个文本源（XMBC 宏串 / JSON 宏行）转成动作行。
-// 主界面「宏编辑保存」「宏执行绑定」两处共用同一个弹窗与转换逻辑。
 import { apiCall } from './core/api.js';
 import { showToast } from './core/dom.js';
 
-export async function convertMacroText(rawText) {
-  const text = String(rawText || '').trim();
+function parseJsonRows(text) {
+  if (!text.startsWith('[')) return null;
+  try {
+    const parsed = JSON.parse(text);
+    return Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function convertMacroText(rawText, simplifyXmbc = false) {
+  const source = String(rawText || '');
+  const text = source.trim();
   if (!text) throw new Error('内容是空的');
 
-  // 以 [ 开头就当 JSON 行数组，否则按 XMBC 宏串解析
-  let rowsPayload = null;
-  if (text.charAt(0) === '[') {
-    try {
-      const parsed = JSON.parse(text);
-      if (Array.isArray(parsed)) rowsPayload = parsed;
-    } catch (err) {
-      rowsPayload = null;
-    }
-  }
+  const rowsPayload = parseJsonRows(text);
+  const res = simplifyXmbc && rowsPayload === null
+    ? await apiCall('import_macro_rows', source, null, true, true)
+    : await apiCall('import_macro_rows', rowsPayload === null ? text : null, rowsPayload, true);
 
-  const res = await apiCall('import_macro_rows', rowsPayload ? null : text, rowsPayload, true);
   const data = res.data || {};
   return {
     rows: Array.isArray(data.rows) ? data.rows : [],
@@ -27,55 +29,60 @@ export async function convertMacroText(rawText) {
   };
 }
 
-/**
- * 打开「导入宏」弹窗。
- * @param {object} options
- * @param {string} options.title      弹窗标题
- * @param {string} [options.note]     标题下的补充说明
- * @param {(result:{rows:Array,warnings:Array,stats:object}) => Promise<void>|void} options.onRows
- */
 export function openImportMacroDialog(options) {
   const opts = options || {};
   if (document.getElementById('import-macro-overlay')) return;
 
   const overlay = document.createElement('div');
   overlay.id = 'import-macro-overlay';
-  overlay.style.cssText = 'position:fixed;inset:0;z-index:9000;background:rgba(0,0,0,.62);'
-    + 'display:flex;align-items:center;justify-content:center;padding:24px';
+  overlay.className = 'sd-backdrop';
 
   overlay.innerHTML = `
-    <div style="width:760px;max-width:94vw;height:440px;max-height:86vh;display:flex;flex-direction:column;
-                background:var(--card,#17171b);border:1px solid var(--border,#2a2a30);border-radius:12px;
-                overflow:hidden;box-shadow:0 18px 50px rgba(0,0,0,.55)">
-      <div style="display:flex;align-items:center;justify-content:space-between;padding:14px 18px;
-                  border-bottom:1px solid var(--border,#2a2a30)">
-        <strong style="font-size:14px">${escapeHtml(opts.title || '导入现成宏')}</strong>
-        <button data-close="1" style="background:none;border:none;color:inherit;font-size:18px;cursor:pointer">×</button>
-      </div>
-      <div style="flex:1;display:flex;flex-direction:column;gap:10px;padding:16px 18px;overflow:hidden">
-        <div style="font-size:12px;line-height:1.7;color:var(--muted,#9aa0a6)">
-          粘 <b>XMBC 宏串</b>（<code>{WAITMS:300}{LMB}{CTRL}c</code>）或 <b>JSON 宏行</b>
-          （<code>[["kd","w",20]]</code>）。<br>
-          ${escapeHtml(opts.note || '旧宏行格式装不下的东西（滚轮、层切换、向窗口发消息…）会写成一条 note 注释行，内容不会丢。')}
+    <div class="sd-panel sd-panel-lg" role="dialog" aria-modal="true" aria-labelledby="import-macro-title">
+      <div class="sd-head sd-head-row">
+        <div>
+          <h3 id="import-macro-title">${escapeHtml(opts.title || '导入现成宏')}</h3>
+          <p class="sd-desc">${escapeHtml(opts.note || '支持 XMBC 宏串（{WAITMS:300}{LMB}）或 JSON 宏行（[["kd","w",20]]）。')}</p>
         </div>
-        <textarea id="import-macro-text" spellcheck="false" placeholder="{WAITMS:300}{LMB}{WAITMS:120}"
-          style="flex:1;resize:none;padding:10px;border-radius:8px;border:1px solid var(--border,#2a2a30);
-                 background:var(--bg,#0f0f12);color:inherit;font-family:Consolas,monospace;
-                 font-size:12.5px;line-height:1.6"></textarea>
-        <div id="import-macro-hint" style="font-size:12px;min-height:16px;color:var(--muted,#9aa0a6)"></div>
+        <button class="icon-btn" data-close="1" type="button" aria-label="关闭">×</button>
       </div>
-      <div style="display:flex;justify-content:flex-end;gap:10px;padding:12px 18px;
-                  border-top:1px solid var(--border,#2a2a30)">
-        <button data-close="1" style="padding:7px 14px;border-radius:8px;border:1px solid var(--border,#2a2a30);
-                background:transparent;color:inherit;cursor:pointer">取消</button>
-        <button id="import-macro-ok" style="padding:7px 16px;border-radius:8px;border:none;background:#e2703a;
-                color:#fff;cursor:pointer;font-weight:600">转换</button>
+      <div class="sd-body">
+        <textarea id="import-macro-text" class="sd-textarea" aria-label="宏文本" spellcheck="false"
+          placeholder="{WAITMS:300}{LMB}{WAITMS:120}"></textarea>
+        ${opts.allowXmbcSimplification ? `
+          <div class="import-macro-option">
+            <label class="switch">
+              <input id="import-macro-simplify" type="checkbox" role="switch"
+                     aria-labelledby="import-macro-simplify-label" aria-describedby="import-macro-simplify-description">
+              <span class="switch-slider" aria-hidden="true"></span>
+            </label>
+            <div>
+              <label id="import-macro-simplify-label" for="import-macro-simplify">简化 X-Mouse 宏</label>
+              <div id="import-macro-simplify-description"></div>
+            </div>
+          </div>` : ''}
+        <div id="import-macro-hint" class="sd-field-hint" role="status"></div>
+      </div>
+      <div class="sd-foot">
+        <button class="sd-btn" data-close="1" type="button">取消</button>
+        <button id="import-macro-ok" class="sd-btn sd-btn-primary" type="button">转换</button>
       </div>
     </div>`;
 
   document.body.appendChild(overlay);
 
-  const close = () => overlay.remove();
+  const close = () => {
+    document.removeEventListener('keydown', onKeydown, true);
+    overlay.remove();
+  };
+  const onKeydown = (e) => {
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      close();
+    }
+  };
+  document.addEventListener('keydown', onKeydown, true);
+
   overlay.addEventListener('click', (e) => {
     if (e.target === overlay || e.target.closest('[data-close]')) close();
   });
@@ -83,31 +90,59 @@ export function openImportMacroDialog(options) {
   const textarea = overlay.querySelector('#import-macro-text');
   const hint = overlay.querySelector('#import-macro-hint');
   const okBtn = overlay.querySelector('#import-macro-ok');
+  const simplifyToggle = overlay.querySelector('#import-macro-simplify');
+  const simplifyDescription = overlay.querySelector('#import-macro-simplify-description');
+
+  const refreshSimplification = () => {
+    if (!simplifyToggle) return;
+    const isJson = parseJsonRows(textarea.value.trim()) !== null;
+    simplifyToggle.disabled = isJson || okBtn.disabled;
+    simplifyDescription.textContent = isJson
+      ? 'JSON 宏行按原格式导入。'
+      : '把连续重复的动作收进循环，保留每次按键和等待。';
+    okBtn.textContent = simplifyToggle.checked && !isJson ? '简化并导入' : '转换';
+  };
+
+  textarea.addEventListener('input', () => {
+    hint.textContent = '';
+    refreshSimplification();
+  });
+  simplifyToggle?.addEventListener('change', () => {
+    hint.textContent = '';
+    refreshSimplification();
+  });
+  refreshSimplification();
   textarea.focus();
 
   okBtn.addEventListener('click', async () => {
     if (!textarea.value.trim()) {
-      hint.textContent = '先粘一段宏进来';
+      hint.textContent = '先粘贴一段宏内容进来';
       return;
     }
+    const simplifyXmbc = Boolean(simplifyToggle?.checked && !simplifyToggle.disabled);
     okBtn.disabled = true;
+    textarea.readOnly = true;
+    refreshSimplification();
     hint.textContent = '转换中…';
     try {
-      const result = await convertMacroText(textarea.value);
+      const result = await convertMacroText(textarea.value, simplifyXmbc);
+      if (!overlay.isConnected) return;
       if (!result.rows.length) {
         hint.textContent = '这段宏没解析出任何动作';
-        okBtn.disabled = false;
         return;
       }
       await opts.onRows(result);
       close();
       if (result.warnings.length) {
         console.warn('[导入现成宏] 告警：', result.warnings);
-        showToast(`有 ${result.warnings.length} 处没有等价写法，已写成 note 注释行`);
+        showToast(`有 ${result.warnings.length} 处没有等价写法，已写成注释行`);
       }
     } catch (err) {
-      hint.textContent = '转换失败：' + (err && err.message ? err.message : err);
+      hint.textContent = err && err.message ? err.message : String(err);
+    } finally {
       okBtn.disabled = false;
+      textarea.readOnly = false;
+      refreshSimplification();
     }
   });
 }

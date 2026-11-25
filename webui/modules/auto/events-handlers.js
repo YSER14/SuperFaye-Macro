@@ -159,10 +159,12 @@
 
             popup.innerHTML = '<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">' +
                 '<div style="width:4px;height:16px;border-radius:2px;background:' + borderColor + ';flex-shrink:0"></div>' +
-                '<div style="font-size:13px;font-weight:600;color:var(--txt,#e2e2e2)">' + title + '</div>' +
+                '<div class="notify-title" style="font-size:13px;font-weight:600;color:var(--txt,#e2e2e2)"></div>' +
                 '<div style="margin-left:auto;cursor:pointer;pointer-events:auto;color:var(--txt3,#888);font-size:12px" class="notify-close">&times;</div>' +
                 '</div>' +
-                '<div style="font-size:12px;color:var(--txt2,#aaa);padding-left:12px;line-height:1.5">' + message + '</div>';
+                '<div class="notify-msg" style="font-size:12px;color:var(--txt2,#aaa);padding-left:12px;line-height:1.5"></div>';
+            popup.querySelector('.notify-title').textContent = String(title == null ? '' : title);
+            popup.querySelector('.notify-msg').textContent = String(message == null ? '' : message);
 
             container.appendChild(popup);
 

@@ -2,14 +2,15 @@
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; frame-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>宏锻控制台</title>
+  <title>SuperFaye Macro</title>
   <script>
     /* 防主题闪烁：渲染前同步本地主题 */
     (function () {
       try {
         var t = localStorage.getItem('macrodriver-theme');
-        if (!t) t = matchMedia('(prefers-color-scheme: dark)').matches ? 'black' : 'cream';
+        if (!t) t = matchMedia('(prefers-color-scheme: light)').matches ? 'snow' : 'black';
         if (t !== 'cream') document.documentElement.setAttribute('data-theme', t);
       } catch (e) { /* 忽略 */ }
     })();
@@ -18,442 +19,568 @@
   <link rel="stylesheet" href="theme.css" />
   <link rel="stylesheet" href="styles.css" />
   <link rel="stylesheet" href="assistant.css" />
+  <link rel="stylesheet" href="assistant-rich.css" />
 </head>
 <body>
-  <div class="bg-noise"></div>
-  <div class="app-shell">
-    <aside class="sidebar">
-      <div class="brand">
-        <div class="brand-mark"><img src="assets/icon.png" alt="超级小葉宏" /></div>
-        <div>
-          <h1>宏锻控制台</h1>
-          <p>高精度宏自动化</p>
+  <div class="app-shell" id="appShell">
+    <aside class="sidebar" id="appSidebar">
+      <div class="sidebar-top">
+        <div class="brand">
+          <div class="brand-mark"><img src="assets/icon.png" alt="SuperFaye Macro" /></div>
+          <div class="brand-text">
+            <h1>SuperFaye</h1>
+            <p>Precision Macro</p>
+          </div>
         </div>
+        <button id="btnToggleSidebar" class="icon-btn sidebar-collapse-btn" type="button" title="收起/展开侧边栏" aria-label="收起/展开侧边栏">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18"/></svg>
+        </button>
       </div>
 
-      <nav class="tab-nav" id="tabNav">
-        <button class="tab-btn active" data-tab="macro">宏执行绑定</button>
-        <button class="tab-btn" data-tab="editor">宏编辑保存</button>
-        <button class="tab-btn" data-tab="params">全局设置</button>
-        <button class="tab-btn" data-tab="console">全局控制台</button>
-        <button class="tab-btn" data-tab="automation">自动化编辑器</button>
+      <nav class="tab-nav" id="tabNav" aria-label="主导航">
+        <div class="nav-group-label">工作区</div>
+        <button class="tab-btn active" data-tab="macro" type="button" title="宏绑定与方案">
+          <span class="nav-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13 2 4 14h7l-1 8 9-12h-7z"/></svg></span>
+          <span class="nav-label">绑定与方案</span>
+        </button>
+        <button class="tab-btn" data-tab="editor" type="button" title="宏编排工作台">
+          <span class="nav-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m12 3 9 4.5-9 4.5-9-4.5Z"/><path d="m3 12 9 4.5 9-4.5"/><path d="m3 16.5 9 4.5 9-4.5"/></svg></span>
+          <span class="nav-label">宏工作台</span>
+          <span id="navEditorDirtyDot" class="nav-dot" hidden title="当前宏有未保存改动"></span>
+        </button>
+        <button class="tab-btn" data-tab="automation" type="button" title="节点自动化流程">
+          <span class="nav-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="6" height="6" rx="1.5"/><rect x="15" y="3" width="6" height="6" rx="1.5"/><rect x="9" y="15" width="6" height="6" rx="1.5"/><path d="M6 9v3a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V9"/><path d="M12 14v1"/></svg></span>
+          <span class="nav-label">节点自动化</span>
+        </button>
+
+        <div class="nav-group-label">系统</div>
+        <button class="tab-btn" data-tab="params" type="button" title="全局设置">
+          <span class="nav-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 21v-7"/><path d="M4 10V3"/><path d="M12 21v-9"/><path d="M12 8V3"/><path d="M20 21v-5"/><path d="M20 12V3"/><path d="M2 14h4"/><path d="M10 8h4"/><path d="M18 16h4"/></svg></span>
+          <span class="nav-label">全局设置</span>
+        </button>
+        <button class="tab-btn" data-tab="console" type="button" title="系统控制台">
+          <span class="nav-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 7 5 5-5 5"/><path d="M12 19h7"/></svg></span>
+          <span class="nav-label">系统控制台</span>
+        </button>
       </nav>
 
       <div class="sidebar-foot">
-        <button id="btnStartListeners" class="primary" title="启动后再次点击可关闭全局监听">启动全局监听</button>
-        <button id="btnGlobalPause" title="快捷键可在全局参数中配置，默认 F8">全局暂停</button>
-        <button id="btnStopAll" class="danger" title="默认快捷键 ESC">停止全部宏</button>
+        <div class="engine-dock">
+          <div class="engine-dock-status">
+            <span id="listenerStatusDot" class="status-dot off" aria-hidden="true"></span>
+            <span id="listenerStatusText" class="engine-dock-label">全局监听未启动</span>
+          </div>
+          <button id="btnStartListeners" class="primary engine-main-btn" type="button" title="启动后再次点击可关闭全局监听">
+            启动全局监听
+          </button>
+          <div class="engine-dock-sub">
+            <button id="btnGlobalPause" type="button" title="快捷键可在全局设置中配置，默认 F8">全局暂停</button>
+            <button id="btnStopAll" class="danger" type="button" title="默认快捷键 ESC">停止全部</button>
+          </div>
+        </div>
       </div>
     </aside>
 
     <main class="main-panel">
       <header class="topbar">
-        <div class="status-grid">
-          <div class="pill">
-            <span class="pill-label">运行实例</span>
-            <strong id="statActive">0</strong>
-          </div>
-          <div class="pill">
-            <span class="pill-label">全局暂停</span>
-            <strong id="statPaused">否</strong>
-          </div>
-          <div class="pill">
-            <span class="pill-label">录制状态</span>
-            <strong id="statRec">空闲</strong>
-          </div>
-          <div class="pill">
-            <span class="pill-label">动作/轨迹</span>
-            <strong id="statRecCount">0 / 0</strong>
-          </div>
+        <div class="topbar-left">
+          <h2 id="topbarTitle" class="topbar-title">绑定与方案</h2>
+          <span id="topbarContext" class="topbar-context">方案与触发键管理</span>
         </div>
-        <div class="swatches" role="group" aria-label="主题切换">
-          <button class="sw" data-theme-set="cream" title="纸质主题" aria-pressed="true"></button>
-          <button class="sw" data-theme-set="snow" title="简约主题" aria-pressed="false"></button>
-          <button class="sw" data-theme-set="black" title="纯黑主题" aria-pressed="false"></button>
+
+        <div class="topbar-right">
+          <div class="telemetry-strip" role="status" aria-label="引擎状态遥测">
+            <div class="tele-chip" id="chipActive">
+              <span class="tele-dot" aria-hidden="true"></span>
+              <span class="tele-label">运行</span>
+              <strong id="statActive">0</strong>
+            </div>
+            <div class="tele-chip" id="chipPaused">
+              <span class="tele-label">暂停</span>
+              <strong id="statPaused">否</strong>
+            </div>
+            <div class="tele-chip" id="chipRec">
+              <span class="tele-dot" aria-hidden="true"></span>
+              <span class="tele-label">录制</span>
+              <strong id="statRec">空闲</strong>
+            </div>
+            <div class="tele-chip">
+              <span class="tele-label">动作/轨迹</span>
+              <strong id="statRecCount">0 / 0</strong>
+            </div>
+          </div>
+
+          <div class="swatches" role="group" aria-label="主题切换">
+            <button class="sw" data-theme-set="black" type="button" title="纯黑主题" aria-pressed="true"></button>
+            <button class="sw" data-theme-set="snow" type="button" title="简约主题" aria-pressed="false"></button>
+            <button class="sw" data-theme-set="cream" type="button" title="纸质主题" aria-pressed="false"></button>
+          </div>
         </div>
       </header>
 
-      <section class="tab-page" data-tab-page="params">
-        <div class="card">
-          <div class="card-head">
-            <h2>全局设置</h2>
-            <div class="inline-actions">
-              <button id="btnReloadParams" title="重新从配置文件读取">刷新</button>
-              <button id="btnImportParams">导入设置</button>
-              <button id="btnExportParams">导出设置</button>
-              <button id="btnResetParams" class="danger">恢复默认</button>
-              <button id="btnSaveParamsTop" class="primary">保存设置</button>
-            </div>
-          </div>
-          <p id="paramsConfigPath" class="hint"></p>
-
-          <div class="param-toolbar">
-            <label class="param-search">
-              <input id="paramSearch" type="search" placeholder="搜设置：延迟、绑核、录制、F8…" autocomplete="off" />
-            </label>
-            <div class="seg" id="paramTierSeg" role="group" aria-label="显示范围">
-              <button type="button" class="seg-btn active" data-param-tier="basic">常用</button>
-              <button type="button" class="seg-btn" data-param-tier="advanced">进阶</button>
-              <button type="button" class="seg-btn" data-param-tier="all">全部</button>
-            </div>
-            <label class="param-check"><input type="checkbox" id="chkShowTech" /> 显示术语</label>
-            <label class="param-check"><input type="checkbox" id="chkOnlyChanged" /> 只看改过的</label>
-            <span id="paramSummary" class="param-summary"></span>
-            <button type="button" id="btnSaveParamsToolbar" class="primary param-toolbar-save">保存</button>
-          </div>
-
-          <p class="param-intro">
-            左边写这一项是干什么的，右边填值。原始变量名、默认值和后端说明都收在每项的「技术细节」里，需要排查时展开就是。
-          </p>
-
-          <div id="paramsContainer" class="params-container"></div>
-
-          <div class="inline-actions param-save-bar">
-            <button id="btnSaveParamsBottom" class="primary">保存设置</button>
-            <span class="param-save-note">保存后写入 webui_param_config.json，下次启动继续生效。</span>
-          </div>
-        </div>
-      </section>
-
+      <!-- ══ Tab 1: 绑定与方案 ══════════════════════════════════════════════ -->
       <section class="tab-page active" data-tab-page="macro">
-        <div class="grid-2">
-          <div class="card">
-            <div class="card-head">
-              <h2>宏文件列表</h2>
-              <input id="macroFilter" type="text" placeholder="输入关键字筛选" />
+        <div class="macro-workspace">
+          <aside class="card macro-lib-card">
+            <div class="pane-head">
+              <div class="pane-title-group">
+                <h3>宏文件库</h3>
+                <span id="macroCountBadge" class="count-badge">0</span>
+              </div>
+              <button id="btnRefreshMacros" class="icon-btn" type="button" title="刷新宏文件列表" aria-label="刷新宏文件列表">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/><path d="M3 21v-5h5"/></svg>
+              </button>
             </div>
-            <div class="inline-actions">
-              <button id="btnRefreshMacros">刷新</button>
-              <button id="btnCreateMacro">新建宏</button>
-              <button id="btnDeleteMacro" class="danger">删除宏</button>
-              <button id="btnImportFolder">导入宏文件</button>
-              <button id="btnImportMacroText" title="粘一段现成的宏文本（XMBC 宏串/JSON 宏行），生成一个新的宏文件">导入宏文本</button>
+
+            <div class="search-field">
+              <svg class="search-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+              <input id="macroFilter" type="search" placeholder="筛选宏文件…" autocomplete="off" />
             </div>
+
+            <div class="macro-lib-actions">
+              <button id="btnCreateMacro" class="mini-btn" type="button">新建</button>
+              <button id="btnImportFolder" class="mini-btn" type="button">导入目录</button>
+              <button id="btnImportMacroText" class="mini-btn" type="button" title="粘贴 XMBC 宏串或 JSON 宏行生成文件">粘文本</button>
+              <button id="btnDeleteMacro" class="mini-btn danger" type="button">删除</button>
+            </div>
+
             <ul id="macroList" class="list macro-folder-list"></ul>
-          </div>
+          </aside>
 
-          <div class="card">
-            <h2>绑定与执行</h2>
-            <div class="scheme-bar">
-              <div id="schemeTabs" class="scheme-tabs" role="tablist" aria-label="绑定方案"></div>
-              <div class="inline-actions scheme-actions">
-                <button id="btnAddScheme" title="新建一个空方案并切换过去（数量不限）">＋ 新方案</button>
-                <button id="btnDupScheme" title="复制当前方案（连同里面所有绑定）">复制</button>
-                <button id="btnRenameScheme" title="重命名当前方案">重命名</button>
-                <button id="btnDeleteScheme" class="danger" title="删除当前方案">删除</button>
+          <div class="macro-main-col">
+            <!-- 方案切换条 -->
+            <section class="card scheme-card">
+              <div class="scheme-bar">
+                <div class="scheme-label-wrap">
+                  <span class="section-eyebrow">绑定方案</span>
+                  <div id="schemeTabs" class="scheme-tabs" role="tablist" aria-label="绑定方案"></div>
+                </div>
+                <div class="scheme-actions">
+                  <button id="btnAddScheme" class="mini-btn" type="button" title="新建一个空方案并切换过去">＋ 新方案</button>
+                  <button id="btnDupScheme" class="mini-btn" type="button" title="复制当前方案（连同所有绑定）">复制</button>
+                  <button id="btnRenameScheme" class="mini-btn" type="button" title="重命名当前方案">重命名</button>
+                  <button id="btnDeleteScheme" class="mini-btn danger" type="button" title="删除当前方案">删除</button>
+                </div>
               </div>
-            </div>
-            <p class="hint" id="schemeHint">一个方案＝一整套触发键绑定。切换方案会整套换绑（正在运行的宏会先停下），方案数量不设上限。双击标签可直接改名。</p>
-            <div class="field-row">
-              <label>当前宏</label>
-              <input id="selectedMacroPath" type="text" readonly />
-            </div>
-            <div class="field-row triple">
-              <div>
-                <label>触发键</label>
-                <input id="bindTrigger" type="text" placeholder="如 v / mouse_x1" />
-              </div>
-              <div>
-                <label>重复次数</label>
-                <input id="bindRepeat" type="number" min="1" value="1" />
-              </div>
-              <div>
-                <label>触发模式</label>
-                <select id="bindMode" title="normal 普通：按一次跑一次；pause_resume 暂停/继续；hold_pause 按住暂停；stop_restart 停止并重启；parallel_trigger 并发触发；release_stop 抬起停止；release_pause 抬起暂停">
-                  <option value="normal">普通（按一次跑一次）</option>
-                  <option value="pause_resume">暂停 / 继续切换</option>
-                  <option value="hold_pause">按住暂停</option>
-                  <option value="stop_restart">停止并重启</option>
-                  <option value="parallel_trigger">并发触发</option>
-                  <option value="release_stop">抬起即停止</option>
-                  <option value="release_pause">抬起即暂停</option>
-                </select>
-              </div>
-            </div>
-            <p class="hint" id="bindModeHint"></p>
-            <div class="inline-actions">
-              <button id="btnCaptureKey">键盘/鼠标输入采集</button>
-              <button id="btnBindMacro" class="primary">绑定当前宏</button>
-              <button id="btnRunNow" title="将表单里填写的触发键所绑定的宏试跑一遍">立即试跑一次</button>
-            </div>
+              <p class="scheme-subhint" id="schemeHint">一个方案对应一整套触发键绑定，双击标签可改名。</p>
+            </section>
 
-            <h3>常用执行参数</h3>
-            <div class="field-row triple">
-              <div>
-                <label>倍速执行</label>
-                <input id="macroSpeedFactor" type="number" min="0.05" step="0.05" value="1.00" />
+            <!-- 现有绑定（主体视觉焦点） -->
+            <section class="card bindings-card">
+              <div class="pane-head">
+                <div class="pane-title-group">
+                  <h3>现有绑定</h3>
+                  <span id="bindingCountBadge" class="count-badge">0</span>
+                </div>
+                <div class="binding-head-actions">
+                  <button id="btnSniffInputs" type="button" class="sniff-btn" title="在 6 秒内按鼠标侧键，查看程序检测到的输入事件">按键嗅探</button>
+                  <button id="bindingListenBadge" type="button" class="listen-badge off">热键未生效 · 点此启动全局监听</button>
+                </div>
               </div>
-              <div>
-                <label>随机延迟最小（ms）</label>
-                <input id="macroRandomMin" type="number" step="0.01" value="0" />
-              </div>
-              <div>
-                <label>随机延迟最大（ms）</label>
-                <input id="macroRandomMax" type="number" step="0.01" value="0" />
-              </div>
-            </div>
-            <div class="inline-actions">
-              <button id="btnMacroRandomToggle">随机延迟：关</button>
-              <button id="btnLowCpuModeToggle" title="开启后不启用高精度引擎！">CPU 低占用：关</button>
-              <button id="btnTimePeriodToggle" title="启用 timeBeginPeriod(1)，功耗略微增加。非低占用模式默认开启，此处调整无效">计时器分辨率（1ms）：开</button>
-              <button id="btnApplyRuntimeProfile" title="同步参数至全局" class="primary">应用执行参数</button>
-            </div>
-            <p class="hint">执行中的绑定会高亮为绿色。用每行的下拉框修改触发模式，选择后立即保存。</p>
+              <ul id="bindingList" class="list binding-list"></ul>
+            </section>
 
-            <div class="binding-head">
-              <h3>现有绑定</h3>
-              <div class="binding-head-actions">
-                <button id="btnSniffInputs" type="button" class="sniff-btn"
-                        title="在 6 秒内按鼠标侧键，查看程序检测到的输入事件">按键嗅探
-                </button>
-                <button id="bindingListenBadge" type="button" class="listen-badge off">热键未生效 · 点此启动全局监听</button>
-              </div>
+            <!-- 底部双卡：快速绑定 + 运行参数 -->
+            <div class="macro-bottom-deck">
+              <section class="card bind-form-card">
+                <div class="pane-head compact-head">
+                  <h3>绑定配置</h3>
+                  <button id="btnGoEditSelectedMacro" class="ghost-link-btn" type="button" title="在宏工作台打开当前选中的宏">去工作台编辑 ↗</button>
+                </div>
+
+                <div class="bind-form-grid">
+                  <div class="field-item field-span-2">
+                    <label for="selectedMacroPath">当前选中宏</label>
+                    <input id="selectedMacroPath" type="text" readonly placeholder="请在左侧选择一个宏文件" />
+                  </div>
+
+                  <div class="field-item">
+                    <label for="bindTrigger">触发键</label>
+                    <div class="input-with-btn">
+                      <input id="bindTrigger" type="text" placeholder="如 v / mouse_x2" />
+                      <button id="btnCaptureKey" class="mini-btn" type="button" title="点击后 8 秒内按下按键或鼠标侧键采集">采集</button>
+                    </div>
+                  </div>
+
+                  <div class="field-item">
+                    <label for="bindRepeat">重复次数</label>
+                    <input id="bindRepeat" type="number" min="1" value="1" />
+                  </div>
+
+                  <div class="field-item field-span-2">
+                    <label for="bindMode">触发模式</label>
+                    <div class="bind-mode-row">
+                      <select id="bindMode">
+                        <option value="normal">普通（按一次跑一次）</option>
+                        <option value="pause_resume">暂停 / 继续切换</option>
+                        <option value="hold_pause">按住暂停</option>
+                        <option value="stop_restart">停止并重启</option>
+                        <option value="parallel_trigger">并发触发</option>
+                        <option value="release_stop">抬起即停止</option>
+                        <option value="release_pause">抬起即暂停</option>
+                      </select>
+                      <button id="btnRunNow" type="button" title="立即试跑当前触发键绑定的宏">试跑</button>
+                      <button id="btnBindMacro" class="primary" type="button">绑定当前宏</button>
+                    </div>
+                  </div>
+                </div>
+                <p class="field-hint" id="bindModeHint"></p>
+              </section>
+
+              <section class="card runtime-card">
+                <div class="pane-head compact-head">
+                  <h3>执行引擎参数</h3>
+                  <button id="btnApplyRuntimeProfile" class="mini-btn primary" type="button">应用参数</button>
+                </div>
+
+                <div class="runtime-inputs">
+                  <div class="field-item">
+                    <label for="macroSpeedFactor">倍速执行</label>
+                    <input id="macroSpeedFactor" type="number" min="0.05" step="0.05" value="1.00" />
+                  </div>
+                  <div class="field-item">
+                    <label for="macroRandomMin">随机最小 (ms)</label>
+                    <input id="macroRandomMin" type="number" step="0.01" value="0" />
+                  </div>
+                  <div class="field-item">
+                    <label for="macroRandomMax">随机最大 (ms)</label>
+                    <input id="macroRandomMax" type="number" step="0.01" value="0" />
+                  </div>
+                </div>
+
+                <div class="runtime-toggles">
+                  <button id="btnMacroRandomToggle" class="toggle-chip" type="button">随机延迟：关</button>
+                  <button id="btnLowCpuModeToggle" class="toggle-chip" type="button" title="开启后不启用高精度引擎">CPU 低占用：关</button>
+                  <button id="btnTimePeriodToggle" class="toggle-chip" type="button" title="启用 timeBeginPeriod(1)">计时器 1ms：开</button>
+                </div>
+              </section>
             </div>
-            <ul id="bindingList" class="list compact binding-list"></ul>
           </div>
         </div>
       </section>
 
+      <!-- ══ Tab 2: 宏工作台 ════════════════════════════════════════════════ -->
       <section class="tab-page editor-page" data-tab-page="editor">
-        <div class="editor-grid">
-          <div class="editor-col editor-col-left">
-          <div class="card">
-            <div class="card-head palette-head">
-              <h2>动作块库</h2>
-              <span id="paletteCount" class="palette-count">0 块</span>
-            </div>
-            <p class="hint">照拼宏编辑器的积木块：把块<b>拖</b>到右侧列表的任意位置，或点一下插到选中动作的下面。
-              块自带默认值，双击块就地改参数；「宏组」是纯编排用的抽屉，插入时先命名，存盘时自动摊平。
-              宏组头或下方「我的宏组」里的「存组」会把整组存进库，可起名字、放进文件夹。</p>
-            <div id="blockPalette" class="block-palette"><div class="hint">载入中…</div></div>
-
-            <h3>块参数（选中块后改这里）</h3>
-            <div id="blockParams" class="block-params">
-              <div class="field-row triple">
-                <div>
-                  <label>类型</label>
-                  <select id="actionType" title="宏文件里写入的仍是 kd / ku / md / mu / wait / view / loop / import / note 指令码；group 只在编辑器里存在">
-                    <option value="kd">按下键</option>
-                    <option value="ku">松开键</option>
-                    <option value="md">鼠标按下</option>
-                    <option value="mu">鼠标松开</option>
-                    <option value="wait">等待</option>
-                    <option value="view">视角移动</option>
-                    <option value="loop">循环</option>
-                    <option value="group">宏组</option>
-                    <option value="import">调用子宏</option>
-                    <option value="note">注释</option>
-                  </select>
-                </div>
-                <div id="actionArg1Wrap">
-                  <label id="actionArg1Label">参数1</label>
-                  <input id="actionArg1" type="text" placeholder="按键名，或 dx,dy，或子宏路径" />
-                </div>
-                <div id="actionArg2Wrap">
-                  <label id="actionArg2Label">参数2</label>
-                  <input id="actionArg2" type="text" placeholder="动作后延迟 / 时长（毫秒）" />
-                </div>
+        <div class="editor-shell">
+          <!-- 工作台顶部命令栏 -->
+          <div class="editor-toolbar">
+            <div class="editor-toolbar-left">
+              <div class="active-macro-pill" id="editorActiveFilePill" title="当前编辑的宏文件">
+                <span class="amp-dot"></span>
+                <span id="editorActiveFileName">未选择宏文件</span>
               </div>
-              <div class="inline-actions">
-                <button id="btnUpdateAction">应用修改</button>
-                <button id="btnInsertBelow">在下面插入</button>
-                <button id="btnAppendAction">加到末尾</button>
-                <button id="btnDeleteAction" class="danger" title="多选之后点这里：选中的动作一次全部删掉（父块被删时里面的动作跟着走，Ctrl+Z 可撤销）">删除选中</button>
+              <div class="history-group" role="group" aria-label="动作列表撤销与清空">
+                <button id="btnUndoAction" class="history-btn" type="button" title="撤销上一步改动（Ctrl+Z）">
+                  <span class="history-glyph" aria-hidden="true">↶</span>撤销
+                </button>
+                <button id="btnRedoAction" class="history-btn" type="button" title="重做被撤销的改动（Ctrl+Y）">
+                  <span class="history-glyph" aria-hidden="true">↷</span>重做
+                </button>
+                <button id="btnClearActionList" class="history-btn history-btn--danger" type="button" title="清空整个动作列表（可撤销）">清空</button>
               </div>
             </div>
-            <hr />
 
-            <h3 title="点击打开宏文件，或拖到动作列表插入子宏调用">宏文件</h3>
-            <div class="field-row">
-              <label>目标目录</label>
-              <input id="editorFolder" type="text" value="宏/录制宏" />
-            </div>
-            <div class="field-row">
-              <label>新文件名</label>
-              <input id="editorNewName" type="text" value="新建宏.json" />
-            </div>
-            <div class="inline-actions">
-              <button id="btnEditorCreate">创建空宏</button>
-              <button id="btnEditorRename">重命名当前宏</button>
-              <button id="btnRefreshEditorMacroBrowser">刷新文件夹</button>
-            </div>
-
-            <div class="field-row">
-              <label>重命名新名称</label>
-              <input id="editorRenameName" type="text" placeholder="例如 我的连段.json" />
-            </div>
-            <ul id="editorMacroList" class="list compact editor-macro-list"></ul>
-          </div>
-          </div>
-
-          <div class="editor-col editor-col-main">
-          <div class="card">
-            <div class="card-head editor-action-header">
-              <h2>动作列表</h2>
-              <div class="editor-action-controls">
-                <div class="history-group" role="group" aria-label="动作列表撤销与清空">
-                  <button id="btnUndoAction" class="history-btn" type="button" title="撤销上一步改动（Ctrl+Z）">
-                    <span class="history-glyph" aria-hidden="true">↶</span>撤销
-                  </button>
-                  <button id="btnRedoAction" class="history-btn" type="button" title="重做被撤销的改动（Ctrl+Y）">
-                    <span class="history-glyph" aria-hidden="true">↷</span>重做
-                  </button>
-                  <button id="btnClearActionList" class="history-btn history-btn--danger" type="button" title="清空整个动作列表（可撤销）">清空</button>
-                </div>
-                <button id="btnEditorAssistant" class="mini-btn" type="button">AI 助手</button>
-                <button id="btnReloadEditor" class="mini-btn" type="button">重新加载</button>
-                <button id="btnSaveEditor" class="mini-btn primary" type="button">保存当前宏</button>
-              </div>
-            </div>
-            <div class="hint-row">
-              <p class="hint">拖块拼宏：循环 / 宏组可嵌套、能在容器间拖排；双击块改参数，宏组头「⤓ 存组」可复用。
-                要一次搬多条：点一下加入多选、再点一下移出（Ctrl 点击只留这一条，Shift 点击选一段），
-                然后拖其中任意一条（拖到宏组头上就是收进那组）。
-                多选之后按「删除选中」＝一次删完所有选中项，不是只删一条。</p>
+            <div class="editor-toolbar-right">
               <div class="view-switch" id="actionViewSwitch" role="group" aria-label="动作列表显示方式">
-                <button type="button" class="mini-btn active" data-view-mode="block" title="积木块：一行一个动作，中文描述（默认）">积木块</button>
-                <button type="button" class="mini-btn" data-view-mode="timeline" title="罗技式方块：动作与延迟各占一块，整片横向流式排布、块间箭头相连，顶栏配生成的宏代码；只改显示不改文件">罗技时间轴</button>
+                <button type="button" class="mini-btn active" data-view-mode="block" title="积木块：一行一个动作，中文描述">积木块</button>
+                <button type="button" class="mini-btn" data-view-mode="timeline" title="罗技时间轴：横向流式方块与生成的宏代码">时间轴</button>
               </div>
-              <button id="btnEditorImportText" class="mini-btn" title="粘一段现成的宏（XMBC 宏串或别的 JSON 宏），转成可继续编辑的动作行">导入现成宏</button>
-              <button id="btnBatchComment" class="mini-btn" title="进入批量注释模式后，点击动作可注释，点击可恢复注释可恢复动作">批量注释: 关</button>
-              <button id="btnJumpToRecord" class="mini-btn" type="button" title="跳到本页下面的「宏录制控制 / 轨迹化简与合并」">录制与化简 ↓</button>
-            </div>
-            <div id="timelineCodeBar" class="code-bar hidden">
-              <span class="code-bar-label" title="{MOVE}、{REPEAT}、{IMPORT}、{NOTE} 是本项目的扩展标签，XMBC 原生没有；其余标签与 docs/宏标签参考卡.md 一致">生成的宏代码</span>
-              <code id="timelineCode" class="code-text"></code>
-              <span id="timelineStats" class="code-stats"></span>
-              <button id="btnCopyCode" class="mini-btn" type="button" title="复制这条宏代码">复制</button>
-            </div>
-            <div id="multiSelectBar" class="multi-select-bar" hidden>
-              <span id="multiSelectText" class="multi-select-text">已选 0 条动作</span>
-              <button id="multiSelectClear" type="button" class="mini-btn" title="取消多选（Esc）">取消选择</button>
-            </div>
-            <ul id="actionList" class="list action-list"></ul>
-          </div>
-          </div>
-
-          <div class="editor-col editor-col-side">
-          <div class="card">
-            <h2>宏录制控制</h2>
-            <div class="field-row double">
-              <div>
-                <label>启动模式</label>
-                <select id="recordStartMode" title="定时启动：按下开始后等下方秒数再录；首个事件触发：等到真正有按键/鼠标动作才开始录">
-                  <option value="delayed">定时启动</option>
-                  <option value="first_event">首个事件触发</option>
-                </select>
-              </div>
-              <div>
-                <label>延迟秒数</label>
-                <input id="recordDelay" type="number" step="0.01" min="0" value="0.20" />
-              </div>
-            </div>
-            <div class="inline-actions">
-              <button id="btnStartRecSvc">启动录制监听</button>
-              <button id="btnArmRec" class="primary">开始录制</button>
-              <button id="btnStopRec">停止录制</button>
-              <button id="btnSaveRec">保存录制</button>
-              <button id="btnClearRec" class="danger">清空缓存</button>
-            </div>
-            <div class="inline-actions rec-insert-row">
-              <select id="recInsertKind" title="选哪一份拼进动作列表：完整＝按键+轨迹；仅按键；仅轨迹">
-                <option value="full">完整（按键 + 轨迹）</option>
-                <option value="action">仅按键</option>
-                <option value="track">仅轨迹</option>
-              </select>
-              <button id="btnRecToEditor" class="primary" title="把这次录制的动作直接拼进右侧「可视化动作列表」，不写文件">录到动作列表</button>
-            </div>
-            <p class="hint">「保存录制」会按全局参数写 3 份宏文件；「录到动作列表」只把内容拼进当前宏，不碰文件 ——
-              录完立刻能拖块改参数、套宏组，再点「保存当前宏」。</p>
-
-            <div class="rec-live">
-              <div class="rec-live-head">
-                <h3>实时录制预览</h3>
-                <span id="recLiveBadge" class="rec-live-badge idle">空闲</span>
-                <span id="recLiveMeta" class="rec-live-meta">按下「开始录制」后，这里会实时列出按键与鼠标动作</span>
-              </div>
-              <div id="recLiveHeld" class="rec-live-held"></div>
-              <ul id="recLiveList" class="rec-live-list"></ul>
+              <button id="btnEditorImportText" class="mini-btn" type="button" title="粘一段 XMBC 宏串或 JSON 宏行导入">导入宏串</button>
+              <button id="btnBatchComment" class="mini-btn" type="button" title="点击动作行切换注释或恢复">批量注释：关</button>
+              <button id="btnEditorAssistant" class="mini-btn" type="button" aria-expanded="false">AI 对话</button>
+              <div class="toolbar-sep"></div>
+              <button id="btnReloadEditor" class="mini-btn" type="button">重新加载</button>
+              <button id="btnSaveEditor" class="mini-btn primary" type="button">保存当前宏</button>
             </div>
           </div>
 
-          <div class="card">
-            <h2>轨迹化简与合并</h2>
+          <!-- 三栏工作室主体 -->
+          <div class="editor-grid">
+            <!-- 左栏：积木块库 / 宏文件切换 -->
+            <aside class="card editor-col editor-col-left">
+              <div class="subtab-bar" role="tablist" aria-label="资源区切换">
+                <button class="subtab-btn active" type="button" data-rail-tab="palette">积木块 &amp; 宏组 <span id="paletteCount" class="count-badge">0</span></button>
+                <button class="subtab-btn" type="button" data-rail-tab="files">宏文件</button>
+              </div>
 
-            <div class="field-row">
-              <label>预设</label>
-              <select id="presetSelect" title="按目标场景选择轨迹化简的默认档位">
-                <option value="fps">射击游戏（FPS）</option>
-                <option value="desktop">桌面 / 办公</option>
-                <option value="rpg3d" selected>3D 游戏</option>
-              </select>
-            </div>
-            <div class="field-row">
-              <label>输入宏（包含 view）</label>
-              <input id="simplifyInput" class="record-path-input macro-path-drop-target" type="text" placeholder="宏/录制宏/3d宏_完整.json" />
-            </div>
-            <div class="field-row">
-              <label>化简输出</label>
-              <input id="simplifyOutput" class="record-path-input macro-path-drop-target" type="text" placeholder="宏/录制宏/3d宏_轨迹化简.json" />
-            </div>
-            <div class="inline-actions">
-              <button id="btnSimplify" class="primary">执行轨迹化简</button>
-              <button id="btnUseCurrentMacro" title="把右侧正在编辑的宏填成「输入宏」">用当前宏</button>
-              <button id="btnSimplifyToEditor" title="读「化简输出」那个文件，替换右侧动作列表">化简结果载入动作列表</button>
-            </div>
+              <div class="rail-pane active" data-rail-pane="palette">
+                <p class="rail-hint">拖动块到中间序列，或单击直接插入；双击块可就地编辑参数。</p>
+                <div id="blockPalette" class="block-palette"><div class="hint">载入中…</div></div>
+              </div>
 
-            <hr />
+              <div class="rail-pane" data-rail-pane="files">
+                <div class="file-ops-box">
+                  <div class="field-row double">
+                    <div>
+                      <label for="editorFolder">目标目录</label>
+                      <input id="editorFolder" type="text" value="宏/录制宏" />
+                    </div>
+                    <div>
+                      <label for="editorNewName">新文件名</label>
+                      <input id="editorNewName" type="text" value="新建宏.json" />
+                    </div>
+                  </div>
+                  <div class="inline-actions compact-actions">
+                    <button id="btnEditorCreate" class="mini-btn primary" type="button">创建空宏</button>
+                    <button id="btnRefreshEditorMacroBrowser" class="mini-btn" type="button">刷新目录</button>
+                  </div>
+                  <div class="input-with-btn">
+                    <input id="editorRenameName" type="text" placeholder="输入重命名文件名…" />
+                    <button id="btnEditorRename" class="mini-btn" type="button">重命名</button>
+                  </div>
+                </div>
+                <ul id="editorMacroList" class="list compact editor-macro-list"></ul>
+              </div>
+            </aside>
 
-            <div class="field-row">
-              <label>动作宏</label>
-              <input id="mergeAction" class="record-path-input macro-path-drop-target" type="text" placeholder="宏/录制宏/3d宏_仅按键.json" />
-            </div>
-            <div class="field-row">
-              <label>轨迹宏</label>
-              <input id="mergeTrack" class="record-path-input macro-path-drop-target" type="text" placeholder="宏/录制宏/3d宏_仅轨迹.json" />
-            </div>
-            <div class="field-row">
-              <label>合并输出</label>
-              <input id="mergeOutput" class="record-path-input macro-path-drop-target" type="text" placeholder="宏/录制宏/3d宏_离线合并.json" />
-            </div>
-            <div class="inline-actions">
-              <button id="btnMerge" class="primary">执行离线合并</button>
-              <button id="btnFillMergeFromRecording" title="用录制输出（仅按键 / 仅轨迹）填好上面两个输入">填入录制输出</button>
-              <button id="btnMergeToEditor" title="读「合并输出」那个文件，替换右侧动作列表">合并结果载入动作列表</button>
-            </div>
+            <!-- 中栏：动作序列画布 + 底部块参数条 -->
+            <section class="card editor-col editor-col-main">
+              <div id="timelineCodeBar" class="code-bar hidden">
+                <span class="code-bar-label" title="扩展标签与 XMBC 标签对照">宏代码</span>
+                <code id="timelineCode" class="code-text"></code>
+                <span id="timelineStats" class="code-stats"></span>
+                <button id="btnCopyCode" class="mini-btn" type="button">复制</button>
+              </div>
 
-            <hr />
+              <div id="multiSelectBar" class="multi-select-bar" hidden>
+                <span id="multiSelectText" class="multi-select-text">已选 0 条动作</span>
+                <button id="multiSelectClear" type="button" class="mini-btn">取消选择</button>
+              </div>
 
-            <h3>宏文件夹（点击填充，拖动到输入框）</h3>
-            <div class="inline-actions">
-              <button id="btnRefreshRecordMacroBrowser">刷新宏文件夹</button>
-            </div>
-            <ul id="recordMacroList" class="list compact record-macro-list"></ul>
-            <p class="hint">点击文件名会填进最近聚焦的那个路径输入框；也可以直接把文件拖到输入框上。</p>
-          </div>
+              <ul id="actionList" class="list action-list"></ul>
+
+              <!-- 底部动作参数检验条 -->
+              <div id="blockParams" class="block-params">
+                <div class="block-params-fields field-row triple">
+                  <div>
+                    <label for="actionType">动作类型</label>
+                    <select id="actionType">
+                      <option value="kd">按下键</option>
+                      <option value="ku">松开键</option>
+                      <option value="md">鼠标按下</option>
+                      <option value="mu">鼠标松开</option>
+                      <option value="wait">等待</option>
+                      <option value="view">视角移动</option>
+                      <option value="loop">循环</option>
+                      <option value="group">宏组</option>
+                      <option value="import">调用子宏</option>
+                      <option value="note">注释</option>
+                    </select>
+                  </div>
+                  <div id="actionArg1Wrap">
+                    <label id="actionArg1Label" for="actionArg1">参数1</label>
+                    <input id="actionArg1" type="text" placeholder="按键名 / dx,dy / 路径" />
+                  </div>
+                  <div id="actionArg2Wrap">
+                    <label id="actionArg2Label" for="actionArg2">参数2</label>
+                    <input id="actionArg2" type="text" placeholder="延迟（ms）" />
+                  </div>
+                </div>
+                <div class="block-params-actions">
+                  <button id="btnUpdateAction" class="mini-btn primary" type="button">应用修改</button>
+                  <button id="btnInsertBelow" class="mini-btn" type="button">下方插入</button>
+                  <button id="btnAppendAction" class="mini-btn" type="button">加到末尾</button>
+                  <button id="btnDeleteAction" class="mini-btn danger" type="button" title="删除选中或批量多选的动作">删除</button>
+                </div>
+              </div>
+            </section>
+
+            <!-- 右栏：录制器 & 轨迹化简（Tab 切换） -->
+            <aside class="card editor-col editor-col-side">
+              <div class="subtab-bar" role="tablist" aria-label="工具抽屉">
+                <button class="subtab-btn active" type="button" data-tool-tab="recorder">宏录制</button>
+                <button class="subtab-btn" type="button" data-tool-tab="simplify">轨迹化简与合并</button>
+              </div>
+
+              <div class="tool-pane active" data-tool-pane="recorder">
+                <div class="field-row double">
+                  <div>
+                    <label for="recordStartMode">启动模式</label>
+                    <select id="recordStartMode">
+                      <option value="delayed">定时启动</option>
+                      <option value="first_event">首个事件触发</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label for="recordDelay">延迟（秒）</label>
+                    <input id="recordDelay" type="number" step="0.01" min="0" value="0.20" />
+                  </div>
+                </div>
+
+                <div class="rec-btn-grid">
+                  <button id="btnStartRecSvc" class="rec-svc-btn" type="button">启动录制监听</button>
+                  <button id="btnArmRec" class="primary" type="button">开始录制</button>
+                  <button id="btnStopRec" type="button">停止</button>
+                  <button id="btnSaveRec" type="button">保存文件</button>
+                  <button id="btnClearRec" class="danger" type="button">清空缓存</button>
+                </div>
+
+                <div class="rec-insert-row">
+                  <select id="recInsertKind" title="选择插入到动作列表的内容">
+                    <option value="full">完整（按键 + 轨迹）</option>
+                    <option value="action">仅按键</option>
+                    <option value="track">仅轨迹</option>
+                  </select>
+                  <button id="btnRecToEditor" class="primary mini-btn" type="button">录到列表</button>
+                </div>
+
+                <div class="rec-live">
+                  <div class="rec-live-head">
+                    <span class="rec-live-title">实时事件</span>
+                    <span id="recLiveBadge" class="rec-live-badge idle">空闲</span>
+                    <span id="recLiveMeta" class="rec-live-meta">等待录制</span>
+                  </div>
+                  <div id="recLiveHeld" class="rec-live-held"></div>
+                  <ul id="recLiveList" class="rec-live-list"></ul>
+                </div>
+              </div>
+
+              <div class="tool-pane" data-tool-pane="simplify">
+                <div class="tool-section">
+                  <div class="field-item">
+                    <label for="presetSelect">化简预设</label>
+                    <select id="presetSelect">
+                      <option value="fps">射击游戏（FPS）</option>
+                      <option value="desktop">桌面 / 办公</option>
+                      <option value="rpg3d" selected>3D 游戏</option>
+                    </select>
+                  </div>
+
+                  <div class="field-item">
+                    <label for="simplifyInput">输入宏（含 view）</label>
+                    <div class="input-with-btn">
+                      <input id="simplifyInput" class="record-path-input macro-path-drop-target" type="text" placeholder="宏/录制宏/3d宏_完整.json" />
+                      <button id="btnUseCurrentMacro" class="mini-btn" type="button" title="填入当前正在编辑的宏">当前</button>
+                    </div>
+                  </div>
+
+                  <div class="field-item">
+                    <label for="simplifyOutput">化简输出路径</label>
+                    <input id="simplifyOutput" class="record-path-input macro-path-drop-target" type="text" placeholder="宏/录制宏/3d宏_轨迹化简.json" />
+                  </div>
+
+                  <div class="inline-actions compact-actions">
+                    <button id="btnSimplify" class="mini-btn primary" type="button">执行化简</button>
+                    <button id="btnSimplifyToEditor" class="mini-btn" type="button">载入动作列表</button>
+                  </div>
+                </div>
+
+                <hr />
+
+                <div class="tool-section">
+                  <div class="field-item">
+                    <label for="mergeAction">动作宏</label>
+                    <input id="mergeAction" class="record-path-input macro-path-drop-target" type="text" placeholder="宏/录制宏/3d宏_仅按键.json" />
+                  </div>
+                  <div class="field-item">
+                    <label for="mergeTrack">轨迹宏</label>
+                    <input id="mergeTrack" class="record-path-input macro-path-drop-target" type="text" placeholder="宏/录制宏/3d宏_仅轨迹.json" />
+                  </div>
+                  <div class="field-item">
+                    <label for="mergeOutput">合并输出路径</label>
+                    <input id="mergeOutput" class="record-path-input macro-path-drop-target" type="text" placeholder="宏/录制宏/3d宏_离线合并.json" />
+                  </div>
+                  <div class="inline-actions compact-actions">
+                    <button id="btnFillMergeFromRecording" class="mini-btn" type="button">填录制输出</button>
+                    <button id="btnMerge" class="mini-btn primary" type="button">执行合并</button>
+                    <button id="btnMergeToEditor" class="mini-btn" type="button">载入列表</button>
+                  </div>
+                </div>
+
+                <div class="tool-tree-box">
+                  <div class="pane-head compact-head">
+                    <span class="section-eyebrow">快速填路径（点击或拖入）</span>
+                    <button id="btnRefreshRecordMacroBrowser" class="mini-btn" type="button">刷新</button>
+                  </div>
+                  <ul id="recordMacroList" class="list compact record-macro-list"></ul>
+                </div>
+              </div>
+            </aside>
           </div>
         </div>
       </section>
 
+      <!-- ══ Tab 3: 全局设置 ════════════════════════════════════════════════ -->
+      <section class="tab-page" data-tab-page="params">
+        <div class="params-workspace">
+          <aside class="card params-nav-card">
+            <div class="pane-head compact-head">
+              <h3>设置分类</h3>
+            </div>
+            <nav id="paramNav" class="param-nav-list" aria-label="设置分类导航"></nav>
+            <p id="paramsConfigPath" class="param-config-path"></p>
+          </aside>
+
+          <div class="card params-main-card">
+            <div class="param-toolbar">
+              <div class="search-field param-search">
+                <svg class="search-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+                <input id="paramSearch" type="search" placeholder="搜索设置：延迟、绑核、录制、F8…" autocomplete="off" />
+              </div>
+
+              <div class="seg" id="paramTierSeg" role="group" aria-label="显示范围">
+                <button type="button" class="seg-btn active" data-param-tier="basic">常用</button>
+                <button type="button" class="seg-btn" data-param-tier="advanced">进阶</button>
+                <button type="button" class="seg-btn" data-param-tier="all">全部</button>
+              </div>
+
+              <label class="param-check"><input type="checkbox" id="chkShowTech" /> 显示术语</label>
+              <label class="param-check"><input type="checkbox" id="chkOnlyChanged" /> 只看改过</label>
+              <span id="paramSummary" class="param-summary"></span>
+
+              <div class="param-actions-cluster">
+                <button id="btnReloadParams" class="mini-btn" type="button" title="重新从配置文件读取">刷新</button>
+                <button id="btnImportParams" class="mini-btn" type="button">导入</button>
+                <button id="btnExportParams" class="mini-btn" type="button">导出</button>
+                <button id="btnResetParams" class="mini-btn danger" type="button">默认</button>
+                <button id="btnSaveParamsTop" class="mini-btn primary" type="button">保存设置</button>
+              </div>
+            </div>
+
+            <div id="paramsContainer" class="params-container"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ══ Tab 4: 系统控制台 ══════════════════════════════════════════════ -->
       <section class="tab-page" data-tab-page="console">
-        <div class="card">
-          <div class="card-head">
-            <h2>Python 端控制台</h2>
-            <div class="inline-actions">
-              <button id="btnClearConsole">清空</button>
+        <div class="card console-card">
+          <div class="console-toolbar">
+            <div class="pane-title-group">
+              <h3>系统控制台</h3>
+              <span id="consoleLineBadge" class="count-badge">0 行</span>
+            </div>
+
+            <div class="seg" id="consoleFilterSeg" role="group" aria-label="日志级别过滤">
+              <button type="button" class="seg-btn active" data-console-filter="all">全部</button>
+              <button type="button" class="seg-btn" data-console-filter="status">状态</button>
+              <button type="button" class="seg-btn" data-console-filter="warn">警告 / 错误</button>
+            </div>
+
+            <div class="search-field console-search">
+              <svg class="search-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+              <input id="consoleSearch" type="search" placeholder="过滤日志…" autocomplete="off" />
+            </div>
+
+            <div class="inline-actions compact-actions">
+              <button id="btnConsoleAutoScroll" class="mini-btn active" type="button">自动滚底：开</button>
+              <button id="btnCopyConsole" class="mini-btn" type="button">复制日志</button>
+              <button id="btnClearConsole" class="mini-btn danger" type="button">清空</button>
             </div>
           </div>
-          <pre id="consoleOutput" class="console"></pre>
+
+          <div id="consoleOutput" class="console" role="log" aria-live="polite"></div>
         </div>
       </section>
 
-      <section class="tab-page" data-tab-page="automation" style="padding:0;height:100%">
-        <iframe id="automationFrame" src="automation_editor.html" style="width:100%;height:100%;border:none"></iframe>
+      <!-- ══ Tab 5: 自动化编辑器 ════════════════════════════════════════════ -->
+      <section class="tab-page automation-page" data-tab-page="automation">
+        <iframe id="automationFrame" src="automation_editor.html" title="节点自动化编辑器"></iframe>
       </section>
     </main>
   </div>
 
-  <div id="toast" class="toast hidden"></div>
+  <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
 
   <script src="theme.js"></script>
   <script type="module" src="app.js"></script>

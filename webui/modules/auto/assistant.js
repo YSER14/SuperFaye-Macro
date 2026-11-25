@@ -65,25 +65,36 @@ function graphDiff(before, after, labels) {
   return diff;
 }
 
-export function bindGraphAssistant({ read, write, nodeName, parameterName, portName, onVisibility }) {
-  mountAssistant(document.getElementById('btn-auto-assistant'), {
+export function bindGraphAssistant({ read, write, identity, nodeName, parameterName, portName, onVisibility }) {
+  const open = mountAssistant(document.getElementById('btn-auto-assistant'), {
     mode: 'graph',
+    defaultOpen: true,
+    heading: '流程助手',
     title: '自动化编辑器',
-    emptyTitle: '把操作写成流程',
+    emptyTitle: '你想自动完成什么？',
+    emptyDescription: '用平常说话的方式描述操作。AI 会搭建流程，你可以继续用对话调整。',
     examples: [
-      ['新建带超时的流程', '起草颜色检测流程，检测间隔 500 ms，未匹配满 5 秒就结束。先向我确认颜色和区域。', 'new'],
-      ['给当前流程加超时', '检查现有流程，给会长时间等待的步骤加 5 秒超时出口。', 'current'],
+      ['按顺序执行操作', '先等待 1 秒，再输入「开始测试」，等 300 毫秒后按一次 Enter，然后结束。'],
+      ['检测颜色并处理超时', '每 500 毫秒检测一次颜色，匹配后按 Enter，5 秒内没匹配就结束。请先问我颜色和区域。'],
+      ['检查已有流程', '检查当前流程里有没有断开的步骤、缺少的条件或永远等不到的出口。把问题告诉我。'],
     ],
     onVisibility,
     applyLabel: '应用到画布',
-    placeholder: '例如，每隔半秒检测指定区域的颜色，三秒没匹配就结束。',
-    scopes: [['new', '无 · 起草新流程'], ['current', '当前画布']],
+    placeholder: '描述要执行的步骤，或告诉 AI 要改哪里…',
+    scopes: [['new', '新流程'], ['current', '当前流程']],
+    autoApply(before, scope) {
+      const { nodes, connections, annotations, groups } = before.graph;
+      return scope === 'current' || (!connections.length && !annotations.length && !groups.length &&
+        nodes.every((node) => node.type === 'flow/start') &&
+        !Object.keys(before.variables).length && !Object.keys(before.settings).length);
+    },
     snapshot() {
       const doc = read();
       if (!doc) return { name: document.getElementById('script-name-input').value,
-        variables: {}, settings: {}, graph: structuredClone(emptyGraph) };
+        revision: identity(), variables: {}, settings: {}, graph: structuredClone(emptyGraph) };
       return {
         name: doc.meta.name,
+        revision: identity(),
         variables: doc.variables,
         settings: doc.settings,
         graph: {
@@ -92,10 +103,9 @@ export function bindGraphAssistant({ read, write, nodeName, parameterName, portN
         },
       };
     },
-    attach(scope, before) {
-      if (scope !== 'current') return { data: null };
-      if (!before.graph.nodes.length) throw new Error('当前画布没有可以附带的节点。');
-      return { data: { variables: before.variables, settings: before.settings, graph: before.graph } };
+    attach(before) {
+      const { variables, settings, graph } = before;
+      return { data: graph.nodes.length ? { current: { variables, settings, graph } } : {} };
     },
     propose(reply, before) {
       const after = { ...reply.document, name: before.name };
@@ -113,4 +123,5 @@ export function bindGraphAssistant({ read, write, nodeName, parameterName, portN
       write(snapshot);
     },
   });
+  document.getElementById('btn-manual-editor').addEventListener('click', () => open(false, false));
 }

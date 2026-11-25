@@ -27,6 +27,8 @@ export const UNFILED_FOLDER = '';
 const SCHEMA_VERSION = 2;
 
 let cache = null;
+let diskBaseline = null;
+let pendingWrite = Promise.resolve();
 
 function newId() {
   return `g_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
@@ -137,12 +139,11 @@ function writeLocalCache(lib) {
 function syncToDisk(lib) {
   const api = window.pywebview && window.pywebview.api;
   if (!api || typeof api.save_group_lib !== 'function') return;
-  try {
-    const result = api.save_group_lib(lib);
-    if (result && typeof result.catch === 'function') result.catch(() => {});
-  } catch (err) {
-    /* 后端不可用就只留 localStorage */
-  }
+  const next = structuredClone(lib);
+  pendingWrite = pendingWrite.then(async () => {
+    const result = await api.save_group_lib(next, diskBaseline);
+    if (result?.ok) diskBaseline = next;
+  }).catch(() => {});
 }
 
 /** 两边合并：以磁盘为底，本地缓存里 savedAt 更新的组覆盖它 */
@@ -178,23 +179,28 @@ export async function hydrateGroupLibrary() {
   }
 
   let remote = null;
+  let needsMigration = false;
   try {
     const result = await api.load_group_lib();
-    if (result && result.ok && result.lib) remote = migrate(result.lib);
+    if (result && result.ok && result.lib) {
+      remote = migrate(result.lib);
+      needsMigration = result.lib.version !== SCHEMA_VERSION || !Array.isArray(result.lib.groups);
+    }
   } catch (err) {
     return { source: 'error' };
   }
 
   const local = loadGroupLibrary();
 
-  if (!remote || !remote.groups.length) {
+  if (!remote) {
     // 磁盘没东西：把当前缓存（可能是升级前攒的）写成第一份存档
-    if (local.groups.length) syncToDisk(local);
-    return { source: remote ? 'empty' : 'missing', groups: local.groups.length };
+    if (local.groups.length || local.folders.length) syncToDisk(local);
+    return { source: 'missing', groups: local.groups.length };
   }
 
+  diskBaseline = structuredClone(remote);
   const merged = mergeLibraries(remote, local);
-  const diskNeedsUpdate = merged.groups.length !== remote.groups.length
+  const diskNeedsUpdate = needsMigration || merged.groups.length !== remote.groups.length
     || merged.folders.length !== remote.folders.length
     || local.groups.some((group) => {
       const kept = remote.groups.find((item) => item.name === group.name);
@@ -215,6 +221,18 @@ export function loadGroupLibrary() {
 /** 丢掉缓存，下次重新从 localStorage 读（另一个窗口改过库时用） */
 export function invalidateGroupLibrary() {
   cache = null;
+}
+
+export async function reloadGroupLibrary() {
+  const existing = pendingWrite;
+  await existing;
+  const result = await window.pywebview.api.load_group_lib();
+  if (existing !== pendingWrite) return reloadGroupLibrary();
+  if (result.ok && result.lib) {
+    const remote = migrate(result.lib);
+    diskBaseline = structuredClone(remote);
+    writeLocalCache(remote);
+  }
 }
 
 /* ───────────────────────────── 查询 ───────────────────────────── */

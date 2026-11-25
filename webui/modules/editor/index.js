@@ -15,7 +15,7 @@ import { setSelectedLine, insertActionAtTarget, moveActionsToTarget, resolveInse
 import { fillActionEditorByAction, buildActionFromInputs, ensureActionFormDefaultsForType } from './action-form.js';
 import { renderActionList, refreshBatchCommentButton, updateCurrentActionFromEditor, saveGroupToLibraryFromPath, readDraggedPaths, clearMultiSelection } from './action-list-render.js';
 import { renderBlockPalette, readPaletteDrag, dropPalettePayload } from './block-palette.js';
-import { GROUP_LIB_STORAGE_KEY, invalidateGroupLibrary, hydrateGroupLibrary } from './group-lib.js';
+import { GROUP_LIB_STORAGE_KEY, invalidateGroupLibrary, hydrateGroupLibrary, reloadGroupLibrary } from './group-lib.js';
 import { bindMacroAssistant } from './assistant.js';
 import { bindActionHistory, resetHistory, markEditorClean } from './history.js';
 import { attachDragAutoScroll } from '../core/drag-autoscroll.js';
@@ -23,7 +23,15 @@ import { attachDragAutoScroll } from '../core/drag-autoscroll.js';
 export { renderActionList };
 export { loadMacroToEditor, renderEditorMacroBrowser, bindEditorActions };
 
-/** 顶层容器（循环 / 宏组）的路径键：打开宏就先展开，循环体一眼能看见 */
+function syncActiveFileIndicator() {
+  const el = q('#editorActiveFileName');
+  const pill = q('#editorActiveFilePill');
+  const path = state.selectedMacro;
+  if (el) el.textContent = path || '未选择宏文件';
+  if (pill) pill.title = path || '当前未选择宏文件';
+  state.syncTopbarHeader?.();
+}
+
 function topLevelContainerKeys(rows) {
   const keys = new Set();
   (Array.isArray(rows) ? rows : []).forEach((row, index) => {
@@ -35,10 +43,8 @@ function topLevelContainerKeys(rows) {
 async function loadMacroToEditor(path) {
   const data = await apiCall('read_macro', path);
   state.editorRows = normalizeMacroRows(data.rows);
-  // 打开宏默认把顶层的循环 / 宏组摊开：折叠着的循环看着就跟「没生效」一样
   state.expandedLoopPathKeys = topLevelContainerKeys(state.editorRows);
   state.inlineEditingPathKey = null;
-  // 换文件就把多选队列清掉：旧文件里的路径在新文件里可能刚好指到别的动作，留着会误删
   state.selectedActionPaths = [];
   state.multiSelectVisibleCount = 0;
 
@@ -51,11 +57,13 @@ async function loadMacroToEditor(path) {
   }
 
   state.selectedMacro = path;
-  q('#selectedMacroPath').value = path;
+  const selectedInput = q('#selectedMacroPath');
+  if (selectedInput) selectedInput.value = path;
+  syncActiveFileIndicator();
+
   const { renderMacroList } = await import('../macro-bind.js');
   renderMacroList();
   renderEditorMacroBrowser();
-  // 换了一份宏就是新的一段编辑：历史从这份文件当前的样子重新起算
   resetHistory();
   renderActionList();
   renderBlockPalette();
@@ -79,9 +87,7 @@ function restoreActionViewMode() {
   let mode = ACTION_VIEW_BLOCK;
   try {
     mode = readStoredViewMode(window.localStorage);
-  } catch (err) {
-    /* 隐私模式拿不到 localStorage，退回默认视图 */
-  }
+  } catch (err) { /* 忽略 */ }
   state.actionViewMode = mode;
 }
 
@@ -89,14 +95,29 @@ function applyActionViewMode(mode) {
   state.actionViewMode = mode === ACTION_VIEW_TIMELINE ? ACTION_VIEW_TIMELINE : ACTION_VIEW_BLOCK;
   try {
     window.localStorage.setItem(ACTION_VIEW_STORAGE_KEY, state.actionViewMode);
-  } catch (err) {
-    /* 存不下就算了，本次会话内仍然生效 */
-  }
+  } catch (err) { /* 忽略 */ }
   refreshViewModeButtons(state.actionViewMode);
   renderActionList();
 }
 
-/** 左栏「⤓ 存组」：优先存当前选中的宏组，没选中就找序列里第一个宏组 */
+function bindWorkbenchSubtabs() {
+  qa('[data-rail-tab]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const target = btn.dataset.railTab;
+      qa('[data-rail-tab]').forEach((b) => b.classList.toggle('active', b === btn));
+      qa('[data-rail-pane]').forEach((p) => p.classList.toggle('active', p.dataset.railPane === target));
+    });
+  });
+
+  qa('[data-tool-tab]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const target = btn.dataset.toolTab;
+      qa('[data-tool-tab]').forEach((b) => b.classList.toggle('active', b === btn));
+      qa('[data-tool-pane]').forEach((p) => p.classList.toggle('active', p.dataset.toolPane === target));
+    });
+  });
+}
+
 async function saveGroupFromPalette() {
   const isGroup = (path) => {
     const action = Array.isArray(path) ? getActionAtPath(path) : null;
@@ -125,7 +146,7 @@ async function saveGroupFromPalette() {
   }
 
   if (!path) {
-    showToast('还没有宏组可存：先从块库点「宏组」插一个，或把几条动作收进宏组');
+    showToast('还没有宏组可存：先从块库插一个宏组，或把动作收进宏组');
     return;
   }
 
@@ -139,11 +160,12 @@ function bindEditorActions() {
   state.renderActionList = renderActionList;
   state.saveGroupFromPalette = saveGroupFromPalette;
 
+  bindWorkbenchSubtabs();
+  syncActiveFileIndicator();
   restoreActionViewMode();
   renderActionList();
   renderBlockPalette();
 
-  // 宏组库真正存在磁盘上（localStorage 只是缓存）：启动时读回来，读完重画左栏
   hydrateGroupLibrary()
     .then(() => renderBlockPalette())
     .catch(() => {});
@@ -151,7 +173,17 @@ function bindEditorActions() {
   bindMacroAssistant();
   bindActionHistory();
 
-  // 另一个窗口改了宏组库（localStorage）时，这边左栏跟着刷新
+  window.addEventListener('macro-assistant-effects', async (event) => {
+    if (event.detail.some((effect) => effect.kind === 'group')) {
+      await reloadGroupLibrary();
+      renderBlockPalette();
+    }
+    if (event.detail.some((effect) => effect.kind === 'macro')) {
+      const { refreshMacros } = await import('../macro-bind.js');
+      await refreshMacros();
+    }
+  });
+
   window.addEventListener('storage', (e) => {
     if (e.key && e.key !== GROUP_LIB_STORAGE_KEY) return;
     invalidateGroupLibrary();
@@ -164,7 +196,7 @@ function bindEditorActions() {
       if (next === state.actionViewMode) return;
       applyActionViewMode(next);
       showToast(next === ACTION_VIEW_TIMELINE
-        ? '已切到罗技时间轴视图（只改显示，不动宏文件）'
+        ? '已切到时间轴视图（只改显示，不改宏文件）'
         : '已切回积木块视图');
     });
   });
@@ -180,7 +212,7 @@ function bindEditorActions() {
     }
   });
 
-  q('#btnRefreshEditorMacroBrowser').addEventListener('click', async () => {
+  q('#btnRefreshEditorMacroBrowser')?.addEventListener('click', async () => {
     const { refreshMacros } = await import('../macro-bind.js');
     await refreshMacros();
     showToast('编辑区宏文件夹已刷新');
@@ -188,19 +220,11 @@ function bindEditorActions() {
 
   q('#btnEditorImportText')?.addEventListener('click', importRowsIntoEditor);
 
-  // 「录制与化简」在窄窗口会折到下面一行，给个直接跳过去的按钮
-  q('#btnJumpToRecord')?.addEventListener('click', () => {
-    const target = document.querySelector('.editor-col-side');
-    if (!target) return;
-    const reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-    target.scrollIntoView({ behavior: reduce ? 'auto' : 'smooth', block: 'start' });
-  });
-
   q('#btnBatchComment')?.addEventListener('click', () => {
     state.batchCommentMode = !state.batchCommentMode;
     if (state.batchCommentMode) {
       state.inlineEditingPathKey = null;
-      showToast('批量注释模式已开启：点击动作注释，点击可恢复注释可恢复动作');
+      showToast('批量注释模式已开启：点击动作注释或恢复');
     } else {
       showToast('批量注释模式已关闭');
     }
@@ -208,7 +232,7 @@ function bindEditorActions() {
     renderActionList();
   });
 
-  q('#btnEditorCreate').addEventListener('click', async () => {
+  q('#btnEditorCreate')?.addEventListener('click', async () => {
     const folder = q('#editorFolder').value.trim() || '宏/录制宏';
     const fileName = q('#editorNewName').value.trim() || '新建宏.json';
     const ret = await apiCall('create_macro', folder, fileName);
@@ -220,6 +244,7 @@ function bindEditorActions() {
     state.multiSelectVisibleCount = 0;
     setSelectedLine(null, 'action');
     ensureActionFormDefaultsForType(q('#actionType').value || 'kd', true);
+    syncActiveFileIndicator();
     resetHistory();
     renderActionList();
     const { refreshMacros } = await import('../macro-bind.js');
@@ -227,25 +252,27 @@ function bindEditorActions() {
     showToast(`已创建：${ret.path}`);
   });
 
-  q('#btnEditorRename').addEventListener('click', async () => {
+  q('#btnEditorRename')?.addEventListener('click', async () => {
     if (!state.selectedMacro) return showToast('请先选择一个宏');
     const newName = q('#editorRenameName').value.trim();
     if (!newName) return showToast('请输入新文件名');
 
     const ret = await apiCall('rename_macro', state.selectedMacro, newName);
     state.selectedMacro = ret.path;
-    q('#selectedMacroPath').value = ret.path;
+    const selectedInput = q('#selectedMacroPath');
+    if (selectedInput) selectedInput.value = ret.path;
+    syncActiveFileIndicator();
     showToast('重命名完成');
     const { refreshMacros, refreshBindings } = await import('../macro-bind.js');
     await refreshMacros();
     await refreshBindings();
   });
 
-  q('#actionType').addEventListener('change', () => {
+  q('#actionType')?.addEventListener('change', () => {
     ensureActionFormDefaultsForType(q('#actionType').value, true);
   });
 
-  q('#btnInsertBelow').addEventListener('click', () => {
+  q('#btnInsertBelow')?.addEventListener('click', () => {
     try {
       const row = buildActionFromInputs();
       const target = resolveInsertTargetAfterSelection();
@@ -257,7 +284,7 @@ function bindEditorActions() {
     }
   });
 
-  q('#btnAppendAction').addEventListener('click', () => {
+  q('#btnAppendAction')?.addEventListener('click', () => {
     try {
       const row = buildActionFromInputs();
       insertActionAtTarget(row, { type: 'root', index: state.editorRows.length });
@@ -268,17 +295,18 @@ function bindEditorActions() {
     }
   });
 
-  q('#btnUpdateAction').addEventListener('click', () => {
+  q('#btnUpdateAction')?.addEventListener('click', async () => {
     try {
-      updateCurrentActionFromEditor();
-      state.inlineEditingPathKey = pathKey(state.selectedActionPath);
+      const updated = await updateCurrentActionFromEditor();
+      if (updated !== false) {
+        state.inlineEditingPathKey = pathKey(state.selectedActionPath);
+      }
     } catch (err) {
       showToast(err.message);
     }
   });
 
-  // 「删除选中」：多选队列里有什么就一次删完（不是只删最后点的那一条）
-  q('#btnDeleteAction').addEventListener('click', () => {
+  q('#btnDeleteAction')?.addEventListener('click', () => {
     const paths = state.selectedActionPaths.length
       ? state.selectedActionPaths
       : (Array.isArray(state.selectedActionPath) && state.selectedActionPath.length ? [state.selectedActionPath] : []);
@@ -315,12 +343,11 @@ function bindEditorActions() {
       : '已删除 1 条动作（Ctrl+Z 可撤销）');
   });
 
-  q('#btnSaveEditor').addEventListener('click', async () => {
+  q('#btnSaveEditor')?.addEventListener('click', async () => {
     const saveButton = q('#btnSaveEditor');
-    // 宏组只是编辑期的抽屉：存盘前摊平成引擎认识的 kd/ku/md/mu/wait/view/loop/import/note
     const rows = flattenGroups(state.editorRows);
     let path = state.selectedMacro;
-    if (!path && !rows.length) return showToast('请先在宏列表里选择文件，或添加动作');
+    if (!path && !rows.length) return showToast('请先在宏文件里选择文件，或添加动作');
     saveButton.disabled = true;
     try {
       if (!path) {
@@ -330,15 +357,17 @@ function bindEditorActions() {
         path = created.path;
         if (!state.selectedMacro) {
           state.selectedMacro = path;
-          q('#selectedMacroPath').value = path;
+          const selectedInput = q('#selectedMacroPath');
+          if (selectedInput) selectedInput.value = path;
+          syncActiveFileIndicator();
         }
       }
       const ret = await apiCall('save_macro', path, rows);
       markEditorClean();
       const synced = Number(ret && ret.cache_refreshed) || 0;
       showToast(synced > 0
-        ? `宏文件已保存，并同步了 ${synced} 个触发键的执行缓存：${path}`
-        : `宏文件已保存：${path}`);
+        ? `宏已保存，并同步了 ${synced} 个触发键缓存：${path}`
+        : `宏已保存：${path}`);
       const { refreshMacros } = await import('../macro-bind.js');
       await refreshMacros();
     } catch (err) {
@@ -348,13 +377,12 @@ function bindEditorActions() {
     }
   });
 
-  q('#btnReloadEditor').addEventListener('click', async () => {
+  q('#btnReloadEditor')?.addEventListener('click', async () => {
     if (!state.selectedMacro) return showToast('请先选择宏');
     await loadMacroToEditor(state.selectedMacro);
     showToast('已重新加载');
   });
 
-  // Ctrl+S：改完循环/次数立刻落盘，免得触发键还在跑磁盘上的旧宏
   document.addEventListener('keydown', (event) => {
     if (!(event.ctrlKey || event.metaKey) || event.altKey) return;
     if (String(event.key || '').toLowerCase() !== 's') return;
@@ -366,7 +394,6 @@ function bindEditorActions() {
 
   const actionList = q('#actionList');
   if (actionList) {
-    // 拖块贴到列表上/下缘就自己滚（原生拖放自动滚动在 WebView2 里不触发）
     attachDragAutoScroll(actionList);
 
     actionList.addEventListener('dragover', (e) => {
@@ -376,7 +403,6 @@ function bindEditorActions() {
     actionList.addEventListener('drop', (e) => {
       e.preventDefault();
 
-      // 块库拖进来的块 / 宏组：直接追加到末尾（列表上更精确的位置由每个 li 自己接）
       const payload = readPaletteDrag(e.dataTransfer);
       if (payload) {
         dropPalettePayload(payload, { type: 'root', index: state.editorRows.length });
@@ -404,7 +430,6 @@ function bindEditorActions() {
       state.draggedActionPaths = [];
     });
 
-    // 点列表空白处＝清空多选队列
     actionList.addEventListener('click', (event) => {
       const target = event.target;
       if (!(target instanceof Element)) return;
@@ -418,7 +443,6 @@ function bindEditorActions() {
     clearMultiSelection();
   });
 
-  // Esc：取消多选（对话框开着 / 行内编辑开着时先让它们处理）
   document.addEventListener('keydown', (event) => {
     if (event.key !== 'Escape') return;
     if (document.querySelector('.sd-backdrop')) return;
@@ -459,21 +483,25 @@ function bindEditorActions() {
   }, true);
 }
 
-/* ── 导入现成宏（共用弹窗见 ../macro-import.js） ───────────────────── */
-
 function importRowsIntoEditor() {
   openImportMacroDialog({
     title: '导入现成宏 → 动作列表',
-    onRows: ({ rows, warnings }) => {
+    allowXmbcSimplification: true,
+    onRows: ({ rows, stats }) => {
       const incoming = normalizeMacroRows(rows);
       if (!incoming.length) return;
       const before = state.editorRows.length;
-      state.editorRows.push(...incoming);
+      state.editorRows = state.editorRows.concat(incoming);
       setSelectedLine([state.editorRows.length - 1], 'action');
       renderActionList();
-      showToast(`已导入 ${incoming.length} 行（${before} → ${state.editorRows.length}）`);
-      if (warnings.length) {
-        console.warn('[导入现成宏] 告警：', warnings);
+      const simplification = stats.simplification;
+      if (simplification) {
+        const { before: original, after } = simplification;
+        showToast(original === after
+          ? `已导入 ${after} 行，没有可简化的连续重复段`
+          : `已简化并导入，动作行 ${original} → ${after}`);
+      } else {
+        showToast(`已导入 ${incoming.length} 行（${before} → ${state.editorRows.length}）`);
       }
     },
   });

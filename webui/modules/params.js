@@ -1,15 +1,9 @@
-// 全局参数面板 · 人话版渲染器
-// ---------------------------------------------------------------------------
-// 设计目标：不牺牲任何设置信息，但让人不用先学会术语。
-//   · 每项的主标题是「人话」，工程术语折叠进「技术细节」（可用工具栏开关常显）；
-//   · 分组按使用场景（停止键 / 速度 / 精度 / 发送通道 …），不按 Python 模块切；
-//   · 工具栏提供：搜索、常用/进阶/全部、只看改过的；
-//   · 后端字段、默认值、说明、建议、示例、依赖关系、保存格式全部保持原样。
-// ---------------------------------------------------------------------------
+// 全局参数面板 · 人话版渲染器 + 左侧分类导航
 
 import { state } from './core/state.js';
 import { q, qa, showToast } from './core/dom.js';
 import { apiCall } from './core/api.js';
+import { openConfirmDialog } from './core/dialog.js';
 import { normalizeParamTextValue } from './core/text.js';
 import { enumLabel } from './core/enum-labels.js';
 import { RECOMMENDED_RANDOM_DELAY_RULES, HIDE_DEFAULT_FIELD_IDS } from './core/constants.js';
@@ -31,6 +25,21 @@ const TYPE_TEXT = {
   json: 'JSON 对象',
 };
 
+const NAV_SHORT_TITLES = {
+  keys: '急停与快捷键',
+  rhythm: '速度与拟人化',
+  precision: '时间精度修正',
+  output: '按键发送通道',
+  resource: '资源与稳定性',
+  record: '录制控制',
+  simplify: '轨迹自动简化',
+  offline: '离线化简预设',
+  editor: '编辑器快捷键',
+  device: '驱动设备微调',
+  behavior: '其它行为',
+  debug: '实验选项',
+};
+
 const filters = {
   level: readStored(VIEW_KEY, 'basic', (v) => ['basic', 'advanced', 'all'].includes(v)),
   showTech: readStored(TECH_KEY, '0', (v) => v === '0' || v === '1') === '1',
@@ -38,16 +47,15 @@ const filters = {
   keyword: '',
 };
 
-/** 渲染建立的行索引：field_id -> { field, plain, row, input, haystack } */
 const rows = new Map();
+const navButtons = new Map();
 let totalRows = 0;
 
-// ── 小工具 ────────────────────────────────────────────────────────────────
 function readStored(key, fallback, validate) {
   try {
     const raw = localStorage.getItem(key);
     if (raw !== null && (!validate || validate(raw))) return raw;
-  } catch (e) { /* localStorage 不可用时用默认值 */ }
+  } catch (e) { /* 忽略 */ }
   return fallback;
 }
 
@@ -62,7 +70,6 @@ function el(tag, className, text) {
   return node;
 }
 
-/** 一个值在界面上的读法：开关→开/关，枚举→中文，其余→原样。 */
 function formatValue(field, value) {
   if (field.type === 'bool') return value ? '开' : '关';
   if (Array.isArray(field.options) && field.options.length) return enumLabel(value);
@@ -70,7 +77,6 @@ function formatValue(field, value) {
   return text === '' ? '（空）' : text;
 }
 
-/** 比较用归一化：忽略 JSON 排版与数字写法差异。 */
 function normalizeForCompare(field, value) {
   if (field.type === 'bool') return value ? '1' : '0';
   if (field.type === 'int' || field.type === 'float') {
@@ -98,24 +104,28 @@ function isFieldChanged(field, input) {
     !== normalizeForCompare(field, field.default);
 }
 
-// ── 主渲染 ────────────────────────────────────────────────────────────────
 export async function renderGlobalParams() {
   const container = q('#paramsContainer');
+  const nav = q('#paramNav');
   const configPathEl = q('#paramsConfigPath');
   if (!container) return;
 
   const data = await apiCall('get_global_params');
 
   rows.clear();
+  navButtons.clear();
   totalRows = 0;
   container.innerHTML = '';
+  if (nav) nav.innerHTML = '';
 
   const groups = new Map();
   PARAM_GROUPS.forEach((group) => groups.set(group.id, { ...group, items: [] }));
 
   let order = 0;
   Object.entries(data.sections || {}).forEach(([section, sectionData]) => {
-    const list = Array.isArray(sectionData.rows) ? sectionData.rows : [];
+    const list = Array.isArray(sectionData.rows)
+      ? sectionData.rows
+      : (Array.isArray(sectionData.items) ? sectionData.items : []);
     list.forEach((field) => {
       const plain = plainFor(field);
       const groupId = groups.has(plain.group) ? plain.group : 'behavior';
@@ -131,7 +141,7 @@ export async function renderGlobalParams() {
   });
 
   if (configPathEl) {
-    configPathEl.textContent = `当前配置文件：${data.config_path || '未知'}`;
+    configPathEl.textContent = `配置文件：${data.config_path || '未知'}`;
   }
 
   groups.forEach((group) => {
@@ -142,7 +152,27 @@ export async function renderGlobalParams() {
       if (ta !== tb) return ta - tb;
       return a.order - b.order;
     });
-    container.appendChild(renderGroup(group));
+    const card = renderGroup(group);
+    container.appendChild(card);
+
+    if (nav) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'param-nav-btn';
+      btn.dataset.groupId = group.id;
+
+      const label = el('span', 'param-nav-label', NAV_SHORT_TITLES[group.id] || group.title);
+      const badge = el('span', 'param-nav-badge', String(group.items.length));
+      btn.append(label, badge);
+
+      btn.addEventListener('click', () => {
+        card.open = true;
+        qa('.param-nav-btn').forEach((n) => n.classList.toggle('active', n === btn));
+        card.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      });
+      nav.appendChild(btn);
+      navButtons.set(group.id, { btn, badge });
+    }
   });
 
   syncToolbar();
@@ -307,7 +337,6 @@ function buildControl(field, section) {
   return { node: input, input };
 }
 
-/** 把后端字段信息挂到真正的控件元素上（开关挂内部 input，不是外壳）。 */
 function assignDataset(input, field, section) {
   input.dataset.paramSection = section;
   input.dataset.paramKey = field.key;
@@ -330,7 +359,6 @@ function buildRecommendTools(input) {
   return tools;
 }
 
-/** 「技术细节」：把后端原有信息一条不落地收在这里。 */
 function buildDetails(field, plain, input) {
   const details = el('details', 'param-more');
   details.appendChild(el('summary', 'param-more-summary', '技术细节'));
@@ -344,10 +372,7 @@ function buildDetails(field, plain, input) {
     else dd.textContent = String(valueNode);
     grid.appendChild(dd);
   };
-  const code = (text) => {
-    const c = el('code', null, text);
-    return c;
-  };
+  const code = (text) => el('code', null, text);
 
   add('技术名称', field.label);
   add('变量名', code(field.field_id));
@@ -396,9 +421,9 @@ function onControlChanged() {
   applyParamDependencies();
   refreshRowStates();
   if (filters.onlyChanged) applyFilters();
+  else syncNavBadges();
 }
 
-// ── 读写与依赖 ────────────────────────────────────────────────────────────
 function readTypedInputValue(input) {
   const type = input.dataset.paramType;
   if (type === 'bool') return input.checked;
@@ -413,7 +438,6 @@ function checkDependency(dep, valuesById) {
   return String(valuesById[target]) === String(expected);
 }
 
-/** 依赖不满足时置灰，并直接说清「先打开哪一项」。 */
 function applyParamDependencies() {
   const inputs = qa('[data-param-key]');
   const valuesById = {};
@@ -449,7 +473,6 @@ function applyParamDependencies() {
   });
 }
 
-/** 每行是否偏离默认值（改过的高亮 + 徽标）。 */
 function refreshRowStates() {
   let changedCount = 0;
   rows.forEach((entry) => {
@@ -461,7 +484,24 @@ function refreshRowStates() {
   return changedCount;
 }
 
-// ── 过滤 / 搜索 ───────────────────────────────────────────────────────────
+function syncNavBadges() {
+  let firstVisible = null;
+  qa('.param-group-card').forEach((card) => {
+    const groupId = card.dataset.groupId;
+    const navEntry = navButtons.get(groupId);
+    if (!navEntry) return;
+    const visibleRows = card.querySelectorAll('.param-row:not(.is-filtered)').length;
+    const changedRows = card.querySelectorAll('.param-row:not(.is-filtered).is-changed').length;
+    navEntry.btn.hidden = visibleRows === 0;
+    navEntry.btn.classList.toggle('has-changed', changedRows > 0);
+    navEntry.badge.textContent = String(visibleRows);
+    if (!firstVisible && visibleRows > 0) firstVisible = navEntry.btn;
+  });
+  if (firstVisible && !q('.param-nav-btn.active:not([hidden])')) {
+    qa('.param-nav-btn').forEach((n) => n.classList.toggle('active', n === firstVisible));
+  }
+}
+
 function applyFilters() {
   const keyword = filters.keyword.trim().toLowerCase();
   let shown = 0;
@@ -484,6 +524,7 @@ function applyFilters() {
     if (countEl) countEl.textContent = `${visibleRows} 项`;
   });
 
+  syncNavBadges();
   updateSummary(shown);
 }
 
@@ -491,9 +532,8 @@ function updateSummary(shown) {
   const summary = q('#paramSummary');
   if (!summary) return;
   const changed = refreshRowStates();
-  const parts = [`共 ${totalRows} 项`, `显示 ${shown} 项`];
+  const parts = [`显示 ${shown}/${totalRows}`];
   if (changed) parts.push(`${changed} 项已改`);
-  if (filters.keyword) parts.push(`搜索「${filters.keyword}」`);
   summary.textContent = parts.join(' · ');
   summary.classList.toggle('has-changed', changed > 0);
 }
@@ -516,20 +556,15 @@ function syncToolbar() {
   const search = q('#paramSearch');
   if (search) search.value = filters.keyword;
 
-  // 兼容既有逻辑：state.showDebugParams 表示「是否展示未开放参数」
   state.showDebugParams = filters.level === 'all';
 }
 
-// ── 保存 / 导入 / 导出 / 重置 ─────────────────────────────────────────────
 async function saveGlobalParams() {
   const payload = {};
 
   const parseStructured = (rawText, type) => {
     const text = String(rawText ?? '').trim();
-    if (!text) {
-      if (type === 'json') return {};
-      return [];
-    }
+    if (!text) return type === 'json' ? {} : [];
 
     if (text.startsWith('[') || text.startsWith('{')) {
       const parsed = JSON.parse(text);
@@ -592,7 +627,6 @@ async function saveGlobalParams() {
   await renderGlobalParams();
   showToast('设置已保存并写入配置文件');
 
-  // 同步自动化编辑器热键
   try {
     if (payload.automation_editor) {
       const cfg = {};
@@ -610,17 +644,24 @@ async function saveGlobalParams() {
         }
       }
     }
-  } catch (e) { /* 编辑器热键同步失败不影响保存结果 */ }
+  } catch (e) { /* 忽略 */ }
 }
 
 async function importGlobalParams() {
   const selected = await apiCall('choose_param_import_file');
   if (selected.canceled) return;
-  if (!window.confirm(`导入会覆盖当前全部设置，确定继续？\n${selected.path}`)) return;
+  const ok = await openConfirmDialog({
+    title: '导入设置',
+    description: '导入会覆盖当前全部全局设置，确定继续？',
+    detail: selected.path,
+    confirmText: '确认覆盖导入',
+    danger: true,
+  });
+  if (!ok) return;
 
   await apiCall('import_global_params', selected.path);
   await renderGlobalParams();
-  showToast('设置已导入，覆盖了原配置');
+  showToast('设置已导入');
 }
 
 async function exportGlobalParams() {
@@ -631,8 +672,13 @@ async function exportGlobalParams() {
 }
 
 async function resetGlobalParamsToDefault() {
-  if (!window.confirm('确认把所有设置恢复成出厂默认？')) return;
-  if (!window.confirm('再确认一次：恢复默认后当前配置会被覆盖，不能撤销。')) return;
+  const ok = await openConfirmDialog({
+    title: '恢复出厂默认设置',
+    description: '所有参数将恢复为默认值并覆盖当前配置文件，操作不可撤销。',
+    confirmText: '恢复默认',
+    danger: true,
+  });
+  if (!ok) return;
 
   await apiCall('reset_global_params_to_default');
   await renderGlobalParams();
@@ -653,14 +699,6 @@ export function bindParamsActions() {
   });
 
   on('#btnSaveParamsTop', 'click', () => {
-    saveGlobalParams().catch((err) => showToast(err.message));
-  });
-
-  on('#btnSaveParamsBottom', 'click', () => {
-    saveGlobalParams().catch((err) => showToast(err.message));
-  });
-
-  on('#btnSaveParamsToolbar', 'click', () => {
     saveGlobalParams().catch((err) => showToast(err.message));
   });
 
