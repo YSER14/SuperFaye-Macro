@@ -1,5 +1,6 @@
 # Build & local toolchain overrides (may contain user-local paths)
 /target/
+.cargo/config
 .cargo/config.toml
 **/*.rs.bk
 *.pdb
@@ -21,6 +22,8 @@ Interception/
 output/
 appdata/
 logs/
+*-解压/
+*.log
 
 # User runtime configuration & local secrets
 webui_*.json
@@ -30,7 +33,7 @@ webui_*.json
 *.key
 *.pfx
 *.p12
-*.sqlite3*
+*.sqlite*
 *.db
 
 # Copyrighted / non-redistributable local source artwork

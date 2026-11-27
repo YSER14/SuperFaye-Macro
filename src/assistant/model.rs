@@ -1,18 +1,18 @@
 use std::collections::HashSet;
+use std::net::{IpAddr, ToSocketAddrs};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
 use indexmap::IndexMap;
 use parking_lot::Mutex;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use serde_json::{Map, Value, json};
 use url::Url;
 
+use crate::assistant::tools::is_global_ip;
 use crate::macro_io::parser::write_text_atomic;
 
-pub const WORKBUDDY_ENDPOINT: &str = "http://127.0.0.1:8790/v1/chat/completions";
-pub const WORKBUDDY_PREFERRED_MODEL: &str = "deepseek-v4.1-flash";
 pub const DEFAULT_CONTEXT_WINDOW: usize = 128_000;
 const RESPONSE_LIMIT: usize = 1_048_576;
 const EFFORTS: [&str; 6] = ["minimal", "low", "medium", "high", "xhigh", "max"];
@@ -39,9 +39,11 @@ pub struct AgentConnection {
     pub key: String,
     pub context_window: usize,
     pub fields: Map<String, Value>,
+    pub image_input: Option<bool>,
+    pub audio_input: Option<bool>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize)]
 struct StoredConfig {
     endpoint: String,
     model: String,
@@ -167,6 +169,38 @@ pub fn reasoning_capabilities(model: &Value) -> Value {
     let context_window_assumed = windows.is_empty();
     let context_window = windows.into_iter().min().unwrap_or(DEFAULT_CONTEXT_WINDOW);
 
+    let modalities: Vec<String> = [
+        "/input_modalities",
+        "/modalities/input",
+        "/architecture/input_modalities",
+    ]
+    .iter()
+    .find_map(|path| model.pointer(path).and_then(Value::as_array))
+    .map(|arr| {
+        arr.iter()
+            .filter_map(|v| v.as_str().map(|s| s.trim().to_ascii_lowercase()))
+            .filter(|s| !s.is_empty())
+            .collect()
+    })
+    .unwrap_or_default();
+
+    let detect_modality = |bool_keys: &[&str], target: &str| -> Option<bool> {
+        bool_keys
+            .iter()
+            .find_map(|key| model.get(key).and_then(Value::as_bool))
+            .or_else(|| (!modalities.is_empty()).then(|| modalities.iter().any(|m| m == target)))
+    };
+
+    let image_input = detect_modality(
+        &["supports_vision", "supports_image_input", "supports_images"],
+        "image",
+    );
+    let audio_input = detect_modality(&["supports_audio", "supports_audio_input"], "audio");
+    let video_input = detect_modality(&["supports_video", "supports_video_input"], "video");
+    let file_input = detect_modality(
+        &["supports_files", "supports_file_input", "supports_documents"],
+        "file",
+    );
     json!({
         "name": name_str,
         "efforts": efforts,
@@ -176,6 +210,11 @@ pub fn reasoning_capabilities(model: &Value) -> Value {
         "supports_reasoning": supports_reasoning,
         "context_window": context_window,
         "context_window_assumed": context_window_assumed,
+        "image_input": image_input,
+        "audio_input": audio_input,
+        "video_input": video_input,
+        "file_input": file_input,
+        "input_modalities": modalities,
     })
 }
 
@@ -231,8 +270,33 @@ pub fn reasoning_fields(capability: Option<&Value>, effort: &str) -> Result<Map<
 
 fn is_loopback_host(host: &str) -> bool {
     let bare = host.trim_matches(['[', ']']);
-    matches!(bare, "localhost" | "127.0.0.1" | "::1")
+    if matches!(bare, "localhost" | "127.0.0.1" | "::1") {
+        return true;
+    }
+    bare.parse::<IpAddr>().is_ok_and(ip_is_loopback)
 }
+
+fn ip_is_loopback(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => v4.is_loopback(),
+        IpAddr::V6(v6) => v6.to_ipv4_mapped().map(|v| v.is_loopback()).unwrap_or_else(|| v6.is_loopback()),
+    }
+}
+
+fn ip_is_blocked_endpoint(ip: IpAddr) -> bool {
+    // Align with web-tool `is_global_ip`, but still allow loopback model endpoints.
+    !ip_is_loopback(ip) && !is_global_ip(ip)
+}
+
+fn host_is_blocked_endpoint(host: &str) -> bool {
+    let bare = host.trim_matches(['[', ']']);
+    if is_loopback_host(bare) {
+        return false;
+    }
+    bare.parse::<IpAddr>().is_ok_and(ip_is_blocked_endpoint)
+}
+
+const BLOCKED_ENDPOINT_MSG: &str = "接口地址不能使用私网、链路本地或保留地址";
 
 /// Normalize an OpenAI-compatible chat completions endpoint URL.
 pub fn normalize_endpoint(value: &str) -> Result<String, String> {
@@ -247,6 +311,9 @@ pub fn normalize_endpoint(value: &str) -> Result<String, String> {
     let local = is_loopback_host(host);
     if !(url.scheme() == "https" || (local && url.scheme() == "http")) {
         return Err("请使用 HTTPS 地址，本机模型可以使用 HTTP".to_string());
+    }
+    if host_is_blocked_endpoint(host) {
+        return Err(BLOCKED_ENDPOINT_MSG.to_string());
     }
     let authority_has_at = trimmed
         .split_once("://")
@@ -296,6 +363,19 @@ pub fn http_fetch_json(url_str: &str, key: &str) -> Result<Value, String> {
     let parsed = Url::parse(url_str)
         .map_err(|_| "模型连接失败或超时，请检查地址、网络和模型服务".to_string())?;
     let is_loopback = parsed.host_str().is_some_and(is_loopback_host);
+    if let Some(host) = parsed.host_str() {
+        if host_is_blocked_endpoint(host) {
+            return Err(BLOCKED_ENDPOINT_MSG.to_string());
+        }
+        if !is_loopback {
+            let port = parsed.port_or_known_default().unwrap_or(443);
+            if let Ok(addrs) = (host, port).to_socket_addrs() {
+                if addrs.into_iter().any(|addr| ip_is_blocked_endpoint(addr.ip())) {
+                    return Err(BLOCKED_ENDPOINT_MSG.to_string());
+                }
+            }
+        }
+    }
     let url_owned = url_str.to_string();
     let key_owned = key.to_string();
 
@@ -349,53 +429,35 @@ struct ModelInner {
     catalog: IndexMap<String, Value>,
 }
 
-/// Manages OpenAI-compatible AI endpoint settings, session/env/local keys, and model catalog.
+/// Manages OpenAI-compatible AI endpoint settings, session/env keys, and model catalog.
 pub struct AssistantModel {
     path: PathBuf,
-    workbuddy_settings: Option<PathBuf>,
     inner: Mutex<ModelInner>,
     fetcher: JsonFetcher,
 }
 
 impl AssistantModel {
-    pub fn load(config_path: impl Into<PathBuf>, workbuddy_settings: Option<PathBuf>) -> Self {
-        Self::with_fetcher(config_path, workbuddy_settings, Arc::new(http_fetch_json))
+    pub fn load(config_path: impl Into<PathBuf>) -> Self {
+        Self::with_fetcher(config_path, Arc::new(http_fetch_json))
     }
 
     pub fn with_fetcher(
         config_path: impl Into<PathBuf>,
-        workbuddy_settings: Option<PathBuf>,
         fetcher: JsonFetcher,
     ) -> Self {
         let path = config_path.into();
-        let wb = workbuddy_settings.or_else(|| {
-            std::env::var("MACRO_AI_WORKBUDDY_SETTINGS")
-                .ok()
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty())
-                .map(PathBuf::from)
-        });
-
-        let mut config = StoredConfig {
-            endpoint: String::new(),
-            model: String::new(),
-        };
-        if let Ok(raw) = std::fs::read_to_string(&path) {
-            if let Ok(val) = serde_json::from_str::<Value>(&raw) {
-                if let (Some(ep), Some(m)) = (
-                    val.get("endpoint").and_then(|v| v.as_str()),
-                    val.get("model").and_then(|v| v.as_str()),
-                ) {
-                    if let Ok(valid) = validated_settings(ep, m) {
-                        config = valid;
-                    }
-                }
-            }
-        }
+        let stored: Value = std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|raw| serde_json::from_str(raw.trim_start_matches('\u{feff}')).ok())
+            .unwrap_or_default();
+        let config = validated_settings(
+            stored["endpoint"].as_str().unwrap_or_default(),
+            stored["model"].as_str().unwrap_or_default(),
+        )
+        .unwrap_or_default();
 
         Self {
             path,
-            workbuddy_settings: wb,
             inner: Mutex::new(ModelInner {
                 config,
                 session_key: String::new(),
@@ -420,28 +482,6 @@ impl AssistantModel {
                     && normalize_endpoint(&env_ep).as_deref() == Ok(endpoint)
                 {
                     return (k, "environment");
-                }
-            }
-        }
-        if endpoint == WORKBUDDY_ENDPOINT {
-            if let Some(ref wb_path) = self.workbuddy_settings {
-                if let Ok(raw) = std::fs::read_to_string(wb_path) {
-                    let cleaned = raw.trim_start_matches('\u{feff}');
-                    if let Ok(val) = serde_json::from_str::<Value>(cleaned) {
-                        if let Some(entries) = val.get("api_keys").and_then(|v| v.as_array()) {
-                            for entry in entries {
-                                let enabled = entry.get("enabled").and_then(|v| v.as_bool()) == Some(true);
-                                if enabled {
-                                    if let Some(k) = entry.get("key").and_then(|v| v.as_str()) {
-                                        let kt = k.trim();
-                                        if !kt.is_empty() {
-                                            return (kt.to_string(), "workbuddy");
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
                 }
             }
         }
@@ -500,8 +540,8 @@ impl AssistantModel {
         }
         if model != inner.config.model {
             let next = StoredConfig {
-                endpoint: inner.config.endpoint.clone(),
                 model: model.to_string(),
+                ..inner.config.clone()
             };
             self.save_config(&next)?;
             inner.config = next;
@@ -565,13 +605,7 @@ impl AssistantModel {
         }
 
         let models: Vec<String> = capabilities.keys().cloned().collect();
-        let suggested = if target_endpoint == WORKBUDDY_ENDPOINT
-            && capabilities.contains_key(WORKBUDDY_PREFERRED_MODEL)
-        {
-            WORKBUDDY_PREFERRED_MODEL.to_string()
-        } else {
-            models[0].clone()
-        };
+        let suggested = models[0].clone();
 
         let mut inner = self.inner.lock();
         let same_endpoint = target_endpoint == inner.config.endpoint;
@@ -627,12 +661,16 @@ impl AssistantModel {
             .unwrap_or(DEFAULT_CONTEXT_WINDOW);
         let eff = if effort.is_empty() { "auto" } else { effort };
         let fields = reasoning_fields(capability, eff)?;
+        let image_input = capability.and_then(|c| c["image_input"].as_bool());
+        let audio_input = capability.and_then(|c| c["audio_input"].as_bool());
         Ok(AgentConnection {
             endpoint: config.endpoint,
             model: config.model,
             key,
             context_window,
             fields,
+            image_input,
+            audio_input,
         })
     }
 }

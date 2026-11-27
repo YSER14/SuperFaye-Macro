@@ -1,4 +1,5 @@
 use std::future::Future;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::Arc;
@@ -15,8 +16,7 @@ use crate::assistant::drafts::{validate_graph, validate_macro};
 use crate::assistant::history::AssistantHistory;
 use crate::assistant::manager::AssistantManager;
 use crate::assistant::model::{
-    AgentConnection, AssistantModel, ModelError, WORKBUDDY_ENDPOINT, estimate_text_tokens,
-    normalize_endpoint,
+    AgentConnection, AssistantModel, ModelError, estimate_text_tokens, normalize_endpoint,
 };
 use crate::assistant::tools::{WorkspaceTools, needs_approval};
 use crate::assistant::workflow::{
@@ -130,13 +130,17 @@ impl LlmTransport for MockTransport {
     }
 }
 
+const TEST_ENDPOINT: &str = "http://127.0.0.1:11434/v1/chat/completions";
+
 fn dummy_connection() -> AgentConnection {
     AgentConnection {
-        endpoint: WORKBUDDY_ENDPOINT.to_string(),
+        endpoint: TEST_ENDPOINT.to_string(),
         model: "fixture".to_string(),
         key: String::new(),
         context_window: 128_000,
         fields: Map::new(),
+        image_input: None,
+        audio_input: None,
     }
 }
 
@@ -353,13 +357,22 @@ fn normalizes_base_and_completion_paths() {
     assert_eq!(normalize_endpoint(endpoint).unwrap(), endpoint);
     assert!(normalize_endpoint("http://example.test/v1").is_err());
     assert!(normalize_endpoint("https://example.test/v1?token=secret").is_err());
+    assert!(normalize_endpoint("https://169.254.169.254/v1").is_err());
+    assert!(normalize_endpoint("https://[fe80::1]/v1").is_err());
+    assert!(normalize_endpoint("http://169.254.169.254/v1").is_err());
+    assert!(normalize_endpoint("https://10.0.0.1/v1").is_err());
+    assert!(normalize_endpoint("https://192.168.1.1/v1").is_err());
+    assert!(normalize_endpoint("https://172.16.0.1/v1").is_err());
+    assert!(normalize_endpoint("https://[fd00::1]/v1").is_err());
+    assert!(normalize_endpoint("https://127.0.0.1:11434/v1").is_ok());
+    assert!(normalize_endpoint("https://api.openai.com/v1").is_ok());
 }
 
 #[test]
 fn key_survives_model_edit_but_is_not_saved_or_carried_to_another_endpoint() {
     let dir = TempDir::new("model_key");
     let path = dir.path().join("config.json");
-    let model = AssistantModel::load(&path, Some(dir.path().join("wb.json")));
+    let model = AssistantModel::load(&path);
     assert_eq!(
         model
             .configure("https://example.test/v1", "one", "test-key", false)
@@ -375,7 +388,7 @@ fn key_survives_model_edit_but_is_not_saved_or_carried_to_another_endpoint() {
     let raw = std::fs::read_to_string(&path).unwrap();
     assert!(!raw.contains("test-key"));
     assert_eq!(
-        AssistantModel::load(&path, Some(dir.path().join("wb.json"))).settings()["key_source"],
+        AssistantModel::load(&path).settings()["key_source"],
         ""
     );
     assert_eq!(
@@ -387,33 +400,20 @@ fn key_survives_model_edit_but_is_not_saved_or_carried_to_another_endpoint() {
 }
 
 #[test]
-fn workbuddy_catalog_uses_enabled_key_and_selects_listed_default() {
-    let dir = TempDir::new("wb_cat");
-    let workbuddy = dir.path().join("workbuddy.json");
-    std::fs::write(
-        &workbuddy,
-        json!({
-            "api_keys": [
-                {"enabled": false, "key": "disabled-key"},
-                {"enabled": true, "key": "fixture-key"}
-            ]
-        })
-        .to_string(),
-    )
-    .unwrap();
+fn model_catalog_deduplicates_entries_and_persists_selected_model() {
+    let dir = TempDir::new("model_cat");
     let local_config = dir.path().join("assistant.json");
     let calls = Arc::new(Mutex::new(Vec::<(String, String)>::new()));
     let calls_cb = Arc::clone(&calls);
     let model = AssistantModel::with_fetcher(
         &local_config,
-        Some(workbuddy),
         Arc::new(move |url, key| {
             calls_cb.lock().push((url.to_string(), key.to_string()));
             Ok(json!({
                 "data": [
-                    {"id": "other-model"},
-                    {"id": "deepseek-v4.1-flash", "context_length": 1_000_000},
-                    {"id": "other-model"}
+                    {"id": "first-model", "context_length": 1_000_000},
+                    {"id": "second-model"},
+                    {"id": "first-model"}
                 ]
             }))
         }),
@@ -422,41 +422,40 @@ fn workbuddy_catalog_uses_enabled_key_and_selects_listed_default() {
     assert_eq!(model.settings(), json!({"endpoint": "", "model": "", "key_source": ""}));
     assert!(model.list_models("", "", false).is_err());
 
-    let result = model.list_models(WORKBUDDY_ENDPOINT, "", false).unwrap();
+    let result = model.list_models(TEST_ENDPOINT, "session-key", false).unwrap();
     assert_eq!(
         calls.lock().as_slice(),
-        &[("http://127.0.0.1:8790/v1/models".to_string(), "fixture-key".to_string())]
+        &[("http://127.0.0.1:11434/v1/models".to_string(), "session-key".to_string())]
     );
     assert_eq!(
         result["models"],
-        json!(["other-model", "deepseek-v4.1-flash"])
+        json!(["first-model", "second-model"])
     );
-    assert_eq!(result["model"], "deepseek-v4.1-flash");
+    assert_eq!(result["model"], "first-model");
     assert!(!local_config.exists());
 
     model
-        .configure(WORKBUDDY_ENDPOINT, "deepseek-v4.1-flash", "", false)
+        .configure(TEST_ENDPOINT, "first-model", "session-key", false)
         .unwrap();
     model.list_models("", "", false).unwrap();
+    model.select_model("second-model").unwrap();
     assert_eq!(
         model.settings(),
         json!({
-            "endpoint": WORKBUDDY_ENDPOINT,
-            "model": "deepseek-v4.1-flash",
-            "key_source": "workbuddy"
+            "endpoint": TEST_ENDPOINT,
+            "model": "second-model",
+            "key_source": "session"
         })
     );
+    model.select_model("first-model").unwrap();
     assert_eq!(model.agent_connection("", "auto").unwrap().context_window, 1_000_000);
 }
 
 #[test]
-fn thinking_controls_use_declared_workbuddy_capabilities() {
+fn thinking_controls_use_declared_model_capabilities() {
     let dir = TempDir::new("thinking");
-    let workbuddy = dir.path().join("workbuddy.json");
-    std::fs::write(&workbuddy, r#"{"api_keys":[{"enabled":true,"key":"fixture-key"}]}"#).unwrap();
     let model = AssistantModel::with_fetcher(
         dir.path().join("assistant.json"),
-        Some(workbuddy),
         Arc::new(|_, _| {
             Ok(json!({
                 "data": [
@@ -466,7 +465,7 @@ fn thinking_controls_use_declared_workbuddy_capabilities() {
             }))
         }),
     );
-    model.configure(WORKBUDDY_ENDPOINT, "tunable", "", false).unwrap();
+    model.configure(TEST_ENDPOINT, "tunable", "fixture-key", false).unwrap();
     model.list_models("", "", false).unwrap();
     assert_eq!(
         Value::Object(model.agent_connection("tunable", "off").unwrap().fields),
@@ -753,14 +752,13 @@ fn start_sends_full_long_input_snapshot_and_history_within_model_budget() {
     let group_lib = Arc::new(GroupLibStore::new());
     let model = Arc::new(AssistantModel::with_fetcher(
         dir.path().join("models.json"),
-        Some(dir.path().join("wb.json")),
         Arc::new(|_, _| {
             Ok(json!({
-                "data": [{"id": "deepseek-v4.1-flash", "context_length": 1_000_000}]
+                "data": [{"id": "long-context-model", "context_length": 1_000_000}]
             }))
         }),
     ));
-    model.configure(WORKBUDDY_ENDPOINT, "deepseek-v4.1-flash", "", false).unwrap();
+    model.configure(TEST_ENDPOINT, "long-context-model", "", false).unwrap();
     model.list_models("", "", false).unwrap();
     let history = Arc::new(AssistantHistory::new(&paths.assistant_db_path));
 
@@ -769,12 +767,12 @@ fn start_sends_full_long_input_snapshot_and_history_within_model_budget() {
     let reply = "完整回复".repeat(600);
     for i in 0..6 {
         let (c, turn) = history
-            .begin("macro", &chat, &format!("{previous}{i}"), "deepseek")
+            .begin("macro", &chat, &format!("{previous}{i}"), "fixture")
             .unwrap();
         chat = c;
         history.finish(turn, Some(&reply), &[], 1, false).unwrap();
     }
-    let pending = history.begin("macro", &chat, "下一轮", "deepseek").unwrap().1;
+    let pending = history.begin("macro", &chat, "下一轮", "fixture").unwrap().1;
     let last_pair_cost = estimate_text_tokens(&format!("{previous}5")) + estimate_text_tokens(&reply);
     let recent = history.recent(&chat, pending, last_pair_cost as isize).unwrap();
     assert_eq!(recent.len(), 2);
@@ -848,9 +846,8 @@ fn compaction_reduces_context_and_keeps_original_chat() {
 
     let model = Arc::new(AssistantModel::load(
         dir.path().join("models.json"),
-        Some(dir.path().join("wb.json")),
     ));
-    model.configure(WORKBUDDY_ENDPOINT, "fixture", "", false).unwrap();
+    model.configure(TEST_ENDPOINT, "fixture", "", false).unwrap();
 
     let before_prompt = before["turns"][0]["prompt"].as_str().unwrap().to_string();
     let mut mgr = AssistantManager::with_model_and_history(
@@ -907,7 +904,7 @@ fn approval_and_saved_history_survive_bridge_restart() {
     let dest_str = destination.to_string_lossy().to_string();
     let project_root = dir.path().join("project");
 
-    let model = Arc::new(AssistantModel::load(&paths.ai_config_path, Some(dir.path().join("wb.json"))));
+    let model = Arc::new(AssistantModel::load(&paths.ai_config_path));
     let history = Arc::new(AssistantHistory::new(&paths.assistant_db_path));
     let mut mgr = AssistantManager::with_model_and_history(
         paths.clone(),
@@ -1052,4 +1049,350 @@ fn web_tool_does_not_connect_to_local_services_in_full_mode() {
         "unexpected result: {result}"
     );
     assert_eq!(connect_calls.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn archive_tools_publish_a_fresh_directory_and_reject_escaping_members() {
+    let dir = TempDir::new("archive");
+    let paths = test_paths(dir.path());
+    let effects = Arc::new(Mutex::new(Vec::new()));
+    let recorded = Arc::clone(&effects);
+    let tools = Arc::new(WorkspaceTools::new(
+        paths,
+        Arc::new(GroupLibStore::new()),
+        "ask",
+        Arc::new(|_, _| Box::pin(async { panic!("unexpected approval") })),
+        Arc::new(move |effect| recorded.lock().push(effect)),
+        Arc::new(AtomicBool::new(false)),
+        Vec::new(),
+    ));
+    let mut ctx = EditorContext::new("macro", "auto", None, defs(), Arc::new(|_| {}), Some(tools), Vec::new());
+    let make_zip = |name: &str, member: &str| {
+        let mut writer = zip::ZipWriter::new(std::fs::File::create(dir.path().join(name)).unwrap());
+        writer.start_file(member, zip::write::SimpleFileOptions::default()).unwrap();
+        writer.write_all(b"bytes from archive").unwrap();
+        writer.finish().unwrap();
+    };
+    make_zip("截图.zip", "目录/1.txt");
+    let args = json!({"path":"截图.zip"});
+    let list = ctx.execute_tool("list_archive", &args).await;
+    assert_eq!(list["entries"][0]["path"], "目录/1.txt", "{list}");
+    assert_eq!(list["next_offset"], Value::Null);
+    let extracted = ctx.execute_tool("extract_archive", &args).await;
+    assert_eq!(extracted["files"], 1, "{extracted}");
+    assert_eq!(std::fs::read(dir.path().join("截图-解压/目录/1.txt")).unwrap(), b"bytes from archive");
+    assert!(ctx.execute_tool("extract_archive", &args).await.get("error").is_some());
+
+    make_zip("越界.zip", "../escaped.txt");
+    let failed = ctx.execute_tool("extract_archive", &json!({"path":"越界.zip"})).await;
+    assert!(failed.get("error").is_some(), "{failed}");
+    assert!(!dir.path().join("越界-解压").exists());
+    assert!(!dir.path().join("escaped.txt").exists());
+    assert_eq!(effects.lock().len(), 1);
+}
+
+#[tokio::test]
+async fn image_tool_uses_multimodal_request_and_returns_only_analysis_to_the_agent() {
+    let dir = TempDir::new("vision");
+    image::RgbImage::from_pixel(60, 40, image::Rgb([32, 100, 219]))
+        .save(dir.path().join("蓝图.png")).unwrap();
+    for allowed in [true, false] {
+        let tools = Arc::new(WorkspaceTools::new(
+            test_paths(dir.path()),
+            Arc::new(GroupLibStore::new()),
+            "auto",
+            Arc::new(move |action, target| Box::pin(async move {
+                assert!(action.contains("发送"));
+                assert!(target.contains("蓝图.png"));
+                allowed
+            })),
+            Arc::new(|_| {}),
+            Arc::new(AtomicBool::new(false)),
+            Vec::new(),
+        ));
+        let requests = Arc::new(Mutex::new(Vec::<Value>::new()));
+        let transport = MockTransport {
+            requests: Arc::clone(&requests),
+            handler: Arc::new(move |index, body, _, _| {
+                if index == 1 {
+                    assert!(body["tools"].as_array().unwrap().iter().any(|tool| tool["function"]["name"] == "inspect_images"));
+                    return LlmTurnResponse {
+                        content: String::new(),
+                        tool_calls: vec![ToolCallItem {
+                            id: "look".into(),
+                            name: "inspect_images".into(),
+                            arguments: json!({"paths":["蓝图.png"],"question":"画面是什么颜色？"}).to_string(),
+                        }],
+                    };
+                }
+                if allowed && index == 2 {
+                    assert!(body.get("tools").is_none());
+                    let url = body.pointer("/messages/1/content/2/image_url/url").unwrap().as_str().unwrap();
+                    assert!(url.starts_with("data:image/png;base64,iVBOR"));
+                    return LlmTurnResponse { content: "蓝色".into(), tool_calls: Vec::new() };
+                }
+                let tool_message = body["messages"].as_array().unwrap().last().unwrap();
+                assert_eq!(tool_message["role"], "tool");
+                assert_eq!(tool_message["tool_call_id"], "look");
+                let text = tool_message["content"].as_str().unwrap();
+                assert!(!text.contains("base64"));
+                assert!(text.contains(if allowed { "蓝色" } else { "未获批准" }), "{text}");
+                LlmTurnResponse {
+                    content: json!({"kind":"answer","message":"已处理"}).to_string(),
+                    tool_calls: Vec::new(),
+                }
+            }),
+        };
+        let mut ctx = EditorContext::new("macro", "auto", None, defs(), Arc::new(|_| {}), Some(tools), Vec::new());
+        let reply = run_agent_loop(
+            &dummy_connection(), "识别图片", &mut ctx, &[],
+            Arc::new(AtomicBool::new(false)), None, &transport,
+        ).await.unwrap();
+        assert_eq!(reply["kind"], "answer");
+        assert_eq!(requests.lock().len(), if allowed { 3 } else { 2 });
+    }
+}
+
+#[test]
+fn model_capabilities_report_multimodal_inputs() {
+    use crate::assistant::model::reasoning_capabilities;
+
+    let omni = reasoning_capabilities(&json!({
+        "id": "omni-v1",
+        "input_modalities": ["text", "image", "audio", "video", "file"]
+    }));
+    assert_eq!(omni["image_input"], true);
+    assert_eq!(omni["audio_input"], true);
+    assert_eq!(omni["video_input"], true);
+    assert_eq!(omni["file_input"], true);
+    assert_eq!(omni["input_modalities"], json!(["text", "image", "audio", "video", "file"]));
+
+    let text_only = reasoning_capabilities(&json!({
+        "id": "text-v1",
+        "modalities": { "input": ["text"] }
+    }));
+    assert_eq!(text_only["image_input"], false);
+    assert_eq!(text_only["audio_input"], false);
+    assert_eq!(text_only["video_input"], false);
+    assert_eq!(text_only["file_input"], false);
+}
+
+#[test]
+fn multimodal_attachments_stage_sanitize_and_build_messages() {
+    use base64::Engine;
+    use crate::assistant::attachments::{
+        build_multimodal_user_content, sanitize_attachments_for_run, stage_disk_file, stage_payload,
+    };
+
+    let dir = TempDir::new("mm_stage");
+    let paths = test_paths(dir.path());
+    paths.ensure_dirs().unwrap();
+    let group_lib = Arc::new(GroupLibStore::new());
+    group_lib.save(
+        &paths.group_lib_path,
+        Some(&json!({
+            "version": 2,
+            "folders": ["测试组"],
+            "groups": [{"name": "闪避取消", "folder": "测试组", "rows": [["kd", "lshift", 20], ["ku", "lshift", 0]]}]
+        })),
+        None,
+    );
+
+    // Prepare workspace macro, docx, zip, and GBK text file
+    std::fs::write(paths.macros_dir.join("连招.json"), r#"[["kd","w",30],["ku","w",0]]"#).unwrap();
+
+    let mut png_bytes = Vec::new();
+    image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(40, 30, image::Rgb([12, 99, 210])))
+        .write_to(&mut std::io::Cursor::new(&mut png_bytes), image::ImageFormat::Png)
+        .unwrap();
+    let png_b64 = format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(&png_bytes));
+
+    let zip_path = dir.path().join("outside_pack.zip");
+    {
+        let mut w = zip::ZipWriter::new(std::fs::File::create(&zip_path).unwrap());
+        w.start_file("01.png", zip::write::SimpleFileOptions::default()).unwrap();
+        w.write_all(&png_bytes).unwrap();
+        w.finish().unwrap();
+    }
+
+    let docx_path = dir.path().join("说明.docx");
+    {
+        let mut w = zip::ZipWriter::new(std::fs::File::create(&docx_path).unwrap());
+        w.start_file("word/document.xml", zip::write::SimpleFileOptions::default()).unwrap();
+        w.write_all(br#"<w:document><w:body><w:p><w:r><w:t>Hello &amp; Word</w:t></w:r></w:p></w:body></w:document>"#).unwrap();
+        w.finish().unwrap();
+    }
+
+    let gbk_path = dir.path().join("gbk_notes.txt");
+    let (gbk_bytes, _, _) = encoding_rs::GBK.encode("连招延迟 80 毫秒");
+    std::fs::write(&gbk_path, gbk_bytes).unwrap();
+
+    let att_img = stage_payload(&paths, &group_lib, &json!({
+        "kind": "image", "name": "截图.png", "data_base64": png_b64
+    })).unwrap();
+    assert_eq!(att_img.kind, "image");
+    assert_eq!(att_img.width, Some(40));
+    assert!(att_img.preview_url.starts_with("data:image/jpeg;base64,"));
+
+    let att_audio = stage_payload(&paths, &group_lib, &json!({
+        "kind": "audio", "name": "voice.wav",
+        "data_base64": format!("data:audio/wav;base64,{}", base64::engine::general_purpose::STANDARD.encode(b"RIFF\x24\x00\x00\x00WAVEfmt ")),
+        "duration_ms": 2200, "transcript": "把等待改成80毫秒"
+    })).unwrap();
+    assert_eq!(att_audio.kind, "audio");
+    assert_eq!(att_audio.format, "wav");
+
+    let att_video = stage_payload(&paths, &group_lib, &json!({
+        "kind": "video", "name": "combo.mp4", "duration_ms": 4000, "width": 40, "height": 30,
+        "frames": [{"timestamp_ms": 1000, "data_base64": png_b64}]
+    })).unwrap();
+    assert_eq!(att_video.kind, "video");
+    assert_eq!(att_video.frames.len(), 1);
+
+    let att_zip = stage_disk_file(&paths, &zip_path, "any").unwrap();
+    assert_eq!(att_zip.kind, "archive");
+    assert!(att_zip.summary.contains("1 图"), "{}", att_zip.summary);
+
+    let att_docx = stage_disk_file(&paths, &docx_path, "any").unwrap();
+    assert_eq!(att_docx.kind, "file");
+    assert!(att_docx.text_excerpt.contains("Hello & Word"), "{}", att_docx.text_excerpt);
+
+    let att_gbk = stage_disk_file(&paths, &gbk_path, "any").unwrap();
+    assert!(att_gbk.text_excerpt.contains("连招延迟 80 毫秒"), "{}", att_gbk.text_excerpt);
+
+    let att_macro = stage_payload(&paths, &group_lib, &json!({
+        "kind": "macro", "path": "宏/连招.json"
+    })).unwrap();
+    assert!(att_macro.text_excerpt.contains("kd"));
+
+    let att_group = stage_payload(&paths, &group_lib, &json!({
+        "kind": "macro_group", "name": "闪避取消"
+    })).unwrap();
+    assert!(att_group.text_excerpt.contains("lshift"));
+
+    let att_coord = stage_payload(&paths, &group_lib, &json!({
+        "kind": "coord", "x": 320, "y": 480
+    })).unwrap();
+    assert_eq!(att_coord.point, Some([320, 480]));
+
+    let att_url = stage_payload(&paths, &group_lib, &json!({
+        "kind": "url", "url": "https://example.com/macro"
+    })).unwrap();
+    assert_eq!(att_url.url, "https://example.com/macro");
+
+    // Reject SSRF/local URL & path traversal during sanitization
+    let allowlist = std::collections::HashSet::new();
+    assert!(sanitize_attachments_for_run(
+        &paths, &group_lib, Some(&json!([{"id":"1","kind":"url","name":"x","url":"http://127.0.0.1/"}])), &allowlist
+    ).is_err());
+    assert!(sanitize_attachments_for_run(
+        &paths, &group_lib, Some(&json!([{"id":"1","kind":"image","name":"x","path":"../secret.png"}])), &allowlist
+    ).is_err());
+    assert!(sanitize_attachments_for_run(
+        &paths, &group_lib, Some(&json!([{"id":"1","kind":"file","name":"x","path":"webui_ai_config.json"}])), &allowlist
+    ).is_err());
+
+    let all = vec![att_img, att_audio, att_video, att_zip, att_docx, att_gbk, att_macro, att_group, att_coord, att_url];
+    let sanitized = sanitize_attachments_for_run(&paths, &group_lib, Some(&json!(all)), &allowlist).unwrap();
+    assert_eq!(sanitized.len(), 10);
+
+    // Multimodal-capable connection emits content array with image_url & input_audio
+    let mut task = Map::new();
+    task.insert("request".into(), json!("分析所有输入"));
+    let mm = build_multimodal_user_content(&paths, &allowlist, &mut task, &sanitized, true, Some(true));
+    let parts = mm.as_array().unwrap();
+    assert!(parts.iter().any(|p| p["type"] == "image_url"));
+    assert!(parts.iter().any(|p| p["type"] == "input_audio"));
+
+    // Text-only connection strips image_url & input_audio cleanly
+    let mut task_txt = Map::new();
+    task_txt.insert("request".into(), json!("分析"));
+    let txt_only = build_multimodal_user_content(&paths, &allowlist, &mut task_txt, &sanitized, false, Some(false));
+    assert!(txt_only.is_string());
+}
+
+#[test]
+fn multimodal_history_migrates_old_schema_and_persists_attachment_only_turns() {
+    use base64::Engine;
+
+    let dir = TempDir::new("mm_hist");
+    let paths = test_paths(dir.path());
+    paths.ensure_dirs().unwrap();
+
+    // Create a legacy SQLite DB without the `attachments` column
+    {
+        let db = rusqlite::Connection::open(&paths.assistant_db_path).unwrap();
+        db.execute_batch(
+            "CREATE TABLE chats (id TEXT PRIMARY KEY, mode TEXT NOT NULL, title TEXT NOT NULL, updated INTEGER NOT NULL);
+             CREATE TABLE turns (id INTEGER PRIMARY KEY, chat TEXT NOT NULL REFERENCES chats(id), prompt TEXT NOT NULL, model TEXT NOT NULL, reply TEXT, phases TEXT NOT NULL DEFAULT '[]', seconds INTEGER, effects TEXT NOT NULL DEFAULT '[]');
+             CREATE TABLE preferences (name TEXT PRIMARY KEY, value TEXT NOT NULL);
+             CREATE TABLE context_summaries (chat TEXT PRIMARY KEY REFERENCES chats(id), through_turn INTEGER NOT NULL, summary TEXT NOT NULL);
+             INSERT INTO chats VALUES ('legacy1', 'macro', '旧对话', 100);
+             INSERT INTO turns(chat, prompt, model, reply) VALUES ('legacy1', '旧请求', 'm', '旧答复');",
+        ).unwrap();
+    }
+
+    let console = Arc::new(RingConsole::default());
+    let group_lib = Arc::new(GroupLibStore::new());
+    let model = Arc::new(AssistantModel::with_fetcher(
+        &paths.ai_config_path,
+        Arc::new(|_, _| Ok(json!({"data": [{"id": "omni", "input_modalities": ["text", "image"]}]}))),
+    ));
+    model.configure(TEST_ENDPOINT, "omni", "", false).unwrap();
+    model.list_models("", "", false).unwrap();
+    let history = Arc::new(AssistantHistory::new(&paths.assistant_db_path));
+
+    // Legacy chat loads seamlessly with empty attachments array
+    let legacy = history.history("macro", Some("legacy1")).unwrap();
+    assert_eq!(legacy["turns"][0]["attachments"], json!([]));
+
+    let mut mgr = AssistantManager::with_model_and_history(
+        paths.clone(),
+        Arc::clone(&console),
+        Arc::clone(&group_lib),
+        model,
+        Arc::clone(&history),
+    );
+    mgr.set_draft_hook(Arc::new(|_mode, _scope, _prompt, _src, _tools| {
+        Box::pin(async move { assistant_ok(json!({"kind": "answer", "message": "已识别附件"})) })
+    }));
+
+    let mut png_bytes = Vec::new();
+    image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(24, 24, image::Rgb([200, 30, 30])))
+        .write_to(&mut std::io::Cursor::new(&mut png_bytes), image::ImageFormat::Png)
+        .unwrap();
+    let staged = mgr.stage_attachment(&json!({
+        "kind": "image",
+        "name": "技能图标.png",
+        "data_base64": format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(&png_bytes)),
+    }));
+    assert_eq!(staged["ok"], true, "{staged}");
+    let att = staged["data"]["attachment"].clone();
+
+    // Send with empty text prompt and only an image attachment
+    let job = mgr.start_with_attachments(
+        "macro",
+        "auto",
+        "",
+        None,
+        None,
+        "omni",
+        "auto",
+        "",
+        "Omni",
+        None,
+        Some(json!([att])),
+    )["data"]
+        .clone();
+    let chat_id = job["chat"].as_str().unwrap().to_string();
+    let finished = poll_until(&mgr, job["id"].as_str().unwrap(), |d| d["state"] == "finished");
+    assert_eq!(finished["result"]["ok"], true);
+
+    let reloaded = AssistantHistory::new(&paths.assistant_db_path);
+    let stored = reloaded.history("macro", Some(&chat_id)).unwrap();
+    assert_eq!(stored["turns"][0]["attachments"][0]["name"], "技能图标.png");
+    assert!(stored["context_tokens"].as_u64().unwrap() > 0);
+    let (_, next_turn) = reloaded.begin("macro", &chat_id, "继续", "Omni").unwrap();
+    let recent = reloaded.recent(&chat_id, next_turn, 100_000).unwrap();
+    assert!(recent[0].content.contains("技能图标.png"), "{}", recent[0].content);
 }

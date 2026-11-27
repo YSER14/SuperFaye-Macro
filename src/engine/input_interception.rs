@@ -1,5 +1,7 @@
+use std::collections::VecDeque;
 use std::ffi::c_void;
 use std::path::Path;
+use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
@@ -7,7 +9,9 @@ use libloading::{Library, Symbol};
 use parking_lot::Mutex;
 
 use crate::bridge::config_store::ConfigStore;
-use crate::engine::input_sendinput::{MACRO_KEYBOARD_EVENT_TAG, get_vk, key_scan};
+use crate::engine::input_sendinput::{
+    MACRO_KEYBOARD_EVENT_TAG, MACRO_MOUSE_EVENT_TAG, get_vk, key_scan,
+};
 
 pub const INTERCEPTION_KEY_DOWN: u16 = 0x00;
 pub const INTERCEPTION_KEY_UP: u16 = 0x01;
@@ -19,6 +23,79 @@ pub const INTERCEPTION_MOUSE_RIGHT_BUTTON_DOWN: u16 = 0x004;
 pub const INTERCEPTION_MOUSE_RIGHT_BUTTON_UP: u16 = 0x008;
 pub const INTERCEPTION_MOUSE_MIDDLE_BUTTON_DOWN: u16 = 0x010;
 pub const INTERCEPTION_MOUSE_MIDDLE_BUTTON_UP: u16 = 0x020;
+pub const INTERCEPTION_MOUSE_WHEEL: u16 = 0x400;
+
+pub const INTERCEPTION_MOUSE_MOVE_ABSOLUTE: u16 = 0x001;
+pub const INTERCEPTION_MOUSE_VIRTUAL_DESKTOP: u16 = 0x002;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EchoKind {
+    Key { vk_ident: u32, pressed: bool },
+    MouseBtn { button_code: u8, pressed: bool },
+    MouseWheel { delta_raw: i16 },
+}
+
+/// Interception self-echoes usually arrive on the LL hook within a few milliseconds.
+/// A short TTL reduces the chance of swallowing a later physical press of the same key
+/// or button; late echoes after this window are treated as physical (safer default).
+pub(crate) const SELF_ECHO_TTL: Duration = Duration::from_millis(30);
+
+struct PendingEcho {
+    kind: EchoKind,
+    expires_at: Instant,
+}
+
+/// Tracks inputs just injected via kernel-level Interception so `WH_KEYBOARD_LL` / `WH_MOUSE_LL`
+/// can distinguish macro self-echoes from physical user presses.
+pub struct SelfEchoTracker {
+    pending: Mutex<VecDeque<PendingEcho>>,
+}
+
+impl SelfEchoTracker {
+    pub fn global() -> &'static Self {
+        static TRACKER: OnceLock<SelfEchoTracker> = OnceLock::new();
+        TRACKER.get_or_init(|| Self {
+            pending: Mutex::new(VecDeque::with_capacity(64)),
+        })
+    }
+
+    pub fn record(&self, kind: EchoKind) {
+        let now = Instant::now();
+        let mut q = self.pending.lock();
+        while let Some(front) = q.front() {
+            if front.expires_at <= now {
+                q.pop_front();
+            } else {
+                break;
+            }
+        }
+        if q.len() >= 128 {
+            q.pop_front();
+        }
+        q.push_back(PendingEcho {
+            kind,
+            expires_at: now + SELF_ECHO_TTL,
+        });
+    }
+
+    pub fn consume(&self, kind: EchoKind) -> bool {
+        let now = Instant::now();
+        let mut q = self.pending.lock();
+        while let Some(front) = q.front() {
+            if front.expires_at <= now {
+                q.pop_front();
+            } else {
+                break;
+            }
+        }
+        if let Some(pos) = q.iter().position(|e| e.kind == kind) {
+            q.remove(pos);
+            true
+        } else {
+            false
+        }
+    }
+}
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
@@ -169,6 +246,25 @@ impl InterceptionContext {
         unsafe { (self.fn_send)(self.ctx, device, stroke as *const InterceptionStroke, 1) > 0 }
     }
 
+    fn send_raw_tracked(
+        &self,
+        device: i32,
+        stroke: &InterceptionStroke,
+        echo: Option<EchoKind>,
+    ) -> bool {
+        if let Some(kind) = echo {
+            SelfEchoTracker::global().record(kind);
+        }
+        if self.send_raw(device, stroke) {
+            true
+        } else {
+            if let Some(kind) = echo {
+                SelfEchoTracker::global().consume(kind);
+            }
+            false
+        }
+    }
+
     pub fn send_key_with_redundancy(
         &self,
         scan_code: u16,
@@ -191,6 +287,14 @@ impl InterceptionContext {
             );
         }
 
+        let is_up = (key_state & INTERCEPTION_KEY_UP) != 0;
+        let is_ext = (flags & INTERCEPTION_KEY_E0) != 0 || (key_state & INTERCEPTION_KEY_E0) != 0;
+        let vk_ident = (if is_ext { 0xE000 } else { 0 }) | (scan_code as u32 & 0xFF);
+        let echo_kind = EchoKind::Key {
+            vk_ident,
+            pressed: !is_up,
+        };
+
         let mut cache = self.kb_lock.lock();
         self.scan_devices(&mut cache, true, false, scan_interval_s);
         if cache.devices.is_empty() {
@@ -202,13 +306,13 @@ impl InterceptionContext {
 
         let mut primary_sent = None;
         if let Some(pref) = cache.preferred {
-            if cache.devices.contains(&pref) && self.send_raw(pref, &raw) {
+            if cache.devices.contains(&pref) && self.send_raw_tracked(pref, &raw, Some(echo_kind)) {
                 primary_sent = Some(pref);
             }
         }
         if primary_sent.is_none() {
             for &dev in &cache.devices {
-                if self.send_raw(dev, &raw) {
+                if self.send_raw_tracked(dev, &raw, Some(echo_kind)) {
                     cache.preferred = Some(dev);
                     primary_sent = Some(dev);
                     break;
@@ -218,7 +322,7 @@ impl InterceptionContext {
         if primary_sent.is_none() {
             self.scan_devices(&mut cache, true, true, scan_interval_s);
             for &dev in &cache.devices {
-                if self.send_raw(dev, &raw) {
+                if self.send_raw_tracked(dev, &raw, Some(echo_kind)) {
                     cache.preferred = Some(dev);
                     primary_sent = Some(dev);
                     break;
@@ -233,10 +337,11 @@ impl InterceptionContext {
             let mut sent_extra = 0;
             for &dev in &cache.devices {
                 if dev != first_dev {
-                    let _ = self.send_raw(dev, &raw);
-                    sent_extra += 1;
-                    if sent_extra >= max_extra {
-                        break;
+                    if self.send_raw_tracked(dev, &raw, Some(echo_kind)) {
+                        sent_extra += 1;
+                        if sent_extra >= max_extra {
+                            break;
+                        }
                     }
                 }
             }
@@ -257,7 +362,7 @@ impl InterceptionContext {
             rolling: 0,
             x: 0,
             y: 0,
-            information: 0,
+            information: MACRO_MOUSE_EVENT_TAG as u32,
         };
         let mut raw: InterceptionStroke = [0u8; 20];
         unsafe {
@@ -277,29 +382,22 @@ impl InterceptionContext {
             return Err("没有可用的 Interception 鼠标设备".to_string());
         }
 
-        let redundant_cap = if is_left_down
-            && cfg.get_bool("interception", "INTERCEPTION_MOUSE_LEFT_DOWN_LIMITED", false)
-        {
+        let redundant_cap = mouse_click_redundant_cap(
+            is_left_down,
+            is_left_up,
+            cfg.get_bool("interception", "INTERCEPTION_MOUSE_LEFT_DOWN_LIMITED", false),
             cfg.get_i64(
                 "interception",
                 "INTERCEPTION_MOUSE_LEFT_REDUNDANT_DOWN_DEVICES",
                 1,
-            )
-            .max(1) as usize
-        } else if is_left_up
-            && cfg.get_bool("interception", "INTERCEPTION_MOUSE_LEFT_UP_LIMITED_RELEASE", false)
-        {
+            ),
+            cfg.get_bool("interception", "INTERCEPTION_MOUSE_LEFT_UP_LIMITED_RELEASE", false),
             cfg.get_i64(
                 "interception",
                 "INTERCEPTION_MOUSE_LEFT_REDUNDANT_UP_DEVICES",
                 1,
-            )
-            .max(1) as usize
-        } else if is_left_down || is_left_up {
-            cache.devices.len()
-        } else {
-            1
-        };
+            ),
+        );
 
         let mut targets = Vec::new();
         if let Some(pref) = cache.preferred {
@@ -313,10 +411,38 @@ impl InterceptionContext {
             }
         }
 
+        let echo_kind = match button_state {
+            INTERCEPTION_MOUSE_LEFT_BUTTON_DOWN => Some(EchoKind::MouseBtn {
+                button_code: 1,
+                pressed: true,
+            }),
+            INTERCEPTION_MOUSE_LEFT_BUTTON_UP => Some(EchoKind::MouseBtn {
+                button_code: 1,
+                pressed: false,
+            }),
+            INTERCEPTION_MOUSE_RIGHT_BUTTON_DOWN => Some(EchoKind::MouseBtn {
+                button_code: 2,
+                pressed: true,
+            }),
+            INTERCEPTION_MOUSE_RIGHT_BUTTON_UP => Some(EchoKind::MouseBtn {
+                button_code: 2,
+                pressed: false,
+            }),
+            INTERCEPTION_MOUSE_MIDDLE_BUTTON_DOWN => Some(EchoKind::MouseBtn {
+                button_code: 3,
+                pressed: true,
+            }),
+            INTERCEPTION_MOUSE_MIDDLE_BUTTON_UP => Some(EchoKind::MouseBtn {
+                button_code: 3,
+                pressed: false,
+            }),
+            _ => None,
+        };
+
         let mut ok_any = false;
         let mut used = 0;
         for dev in targets {
-            if self.send_raw(dev, &raw) {
+            if self.send_raw_tracked(dev, &raw, echo_kind) {
                 if !ok_any {
                     cache.preferred = Some(dev);
                 }
@@ -328,10 +454,17 @@ impl InterceptionContext {
             }
         }
         if ok_any {
-            Ok(())
-        } else {
-            Err("Interception 鼠标点击发送失败".to_string())
+            return Ok(());
         }
+        // Force a device rescan once if all cached handles failed (e.g. wireless mouse reconnect).
+        self.scan_devices(&mut cache, false, true, 3.0);
+        for &dev in &cache.devices {
+            if self.send_raw_tracked(dev, &raw, echo_kind) {
+                cache.preferred = Some(dev);
+                return Ok(());
+            }
+        }
+        Err("Interception 鼠标点击发送失败".to_string())
     }
 
     pub fn send_mouse_move_rel(&self, dx: i32, dy: i32) -> Result<(), String> {
@@ -341,12 +474,49 @@ impl InterceptionContext {
             rolling: 0,
             x: dx,
             y: dy,
-            information: 0,
+            information: MACRO_MOUSE_EVENT_TAG as u32,
         };
+        self.send_mouse_stroke(&ms, "Interception 鼠标移动发送失败")
+    }
+
+    pub fn send_mouse_move_abs(&self, x: i32, y: i32) -> Result<(), String> {
+        let (nx, ny) = crate::engine::input_sendinput::virtual_screen_normalized(x, y);
+        let ms = InterceptionMouseStroke {
+            state: 0,
+            flags: INTERCEPTION_MOUSE_MOVE_ABSOLUTE | INTERCEPTION_MOUSE_VIRTUAL_DESKTOP,
+            rolling: 0,
+            x: nx,
+            y: ny,
+            information: MACRO_MOUSE_EVENT_TAG as u32,
+        };
+        self.send_mouse_stroke(&ms, "Interception 鼠标绝对移动发送失败")
+    }
+
+    /// Inject wheel movement in raw Win32 `WHEEL_DELTA` units (`120` per wheel notch).
+    pub fn send_mouse_scroll(&self, delta: i32) -> Result<(), String> {
+        let rolling = delta.clamp(i16::MIN as i32, i16::MAX as i32) as i16;
+        let ms = InterceptionMouseStroke {
+            state: INTERCEPTION_MOUSE_WHEEL,
+            flags: 0,
+            rolling,
+            x: 0,
+            y: 0,
+            information: MACRO_MOUSE_EVENT_TAG as u32,
+        };
+        let echo = EchoKind::MouseWheel { delta_raw: rolling };
+        SelfEchoTracker::global().record(echo);
+        if let Err(err) = self.send_mouse_stroke(&ms, "Interception 鼠标滚轮发送失败") {
+            SelfEchoTracker::global().consume(echo);
+            return Err(err);
+        }
+        Ok(())
+    }
+
+    fn send_mouse_stroke(&self, ms: &InterceptionMouseStroke, err_msg: &str) -> Result<(), String> {
         let mut raw: InterceptionStroke = [0u8; 20];
         unsafe {
             std::ptr::copy_nonoverlapping(
-                (&ms as *const InterceptionMouseStroke) as *const u8,
+                (ms as *const InterceptionMouseStroke) as *const u8,
                 raw.as_mut_ptr(),
                 std::mem::size_of::<InterceptionMouseStroke>(),
             );
@@ -357,7 +527,7 @@ impl InterceptionContext {
             self.scan_devices(&mut cache, false, true, 3.0);
         }
         if let Some(pref) = cache.preferred {
-            if self.send_raw(pref, &raw) {
+            if cache.devices.contains(&pref) && self.send_raw(pref, &raw) {
                 return Ok(());
             }
         }
@@ -367,8 +537,16 @@ impl InterceptionContext {
                 return Ok(());
             }
         }
-        Err("Interception 鼠标移动发送失败".to_string())
+        self.scan_devices(&mut cache, false, true, 3.0);
+        for &dev in &cache.devices {
+            if self.send_raw(dev, &raw) {
+                cache.preferred = Some(dev);
+                return Ok(());
+            }
+        }
+        Err(err_msg.to_string())
     }
+
 }
 
 impl InterceptionSink for InterceptionContext {
@@ -384,6 +562,25 @@ impl Drop for InterceptionContext {
                 (self.fn_destroy)(self.ctx);
             }
         }
+    }
+}
+
+/// Default left-button clicks go to a single preferred device.
+/// Multi-device redundancy is opt-in via the LIMITED config flags.
+pub(crate) fn mouse_click_redundant_cap(
+    is_left_down: bool,
+    is_left_up: bool,
+    left_down_limited: bool,
+    left_down_devices: i64,
+    left_up_limited: bool,
+    left_up_devices: i64,
+) -> usize {
+    if is_left_down && left_down_limited {
+        left_down_devices.max(1) as usize
+    } else if is_left_up && left_up_limited {
+        left_up_devices.max(1) as usize
+    } else {
+        1
     }
 }
 
@@ -451,5 +648,65 @@ mod tests {
             let last = *mock.calls.lock().last().unwrap();
             assert_eq!(last, (scan, INTERCEPTION_KEY_UP, ext_flag));
         }
+    }
+
+    #[test]
+    fn self_echo_tracker_supports_redundant_counts_and_wheel_echoes() {
+        let tracker = SelfEchoTracker::global();
+        let k = EchoKind::Key {
+            vk_ident: 0x39,
+            pressed: false,
+        };
+        tracker.record(k);
+        tracker.record(k);
+        assert!(tracker.consume(k));
+        assert!(tracker.consume(k));
+        assert!(!tracker.consume(k));
+
+        let w = EchoKind::MouseWheel { delta_raw: -120 };
+        tracker.record(w);
+        assert!(tracker.consume(w));
+        assert!(!tracker.consume(w));
+    }
+
+    #[test]
+    fn self_echo_expires_instead_of_swallowing_later_physical_press() {
+        let tracker = SelfEchoTracker {
+            pending: Mutex::new(VecDeque::with_capacity(4)),
+        };
+        let k = EchoKind::Key {
+            vk_ident: 0x1E,
+            pressed: true,
+        };
+        tracker.record(k);
+        std::thread::sleep(SELF_ECHO_TTL + Duration::from_millis(15));
+        assert!(
+            !tracker.consume(k),
+            "expired self-echo must not consume a later physical press"
+        );
+    }
+
+    #[test]
+    fn left_click_defaults_to_one_preferred_device() {
+        assert_eq!(
+            mouse_click_redundant_cap(true, false, false, 8, false, 8),
+            1
+        );
+        assert_eq!(
+            mouse_click_redundant_cap(false, true, false, 8, false, 8),
+            1
+        );
+        assert_eq!(
+            mouse_click_redundant_cap(true, false, true, 3, false, 8),
+            3
+        );
+        assert_eq!(
+            mouse_click_redundant_cap(false, true, false, 8, true, 2),
+            2
+        );
+        assert_eq!(
+            mouse_click_redundant_cap(false, false, false, 8, false, 8),
+            1
+        );
     }
 }

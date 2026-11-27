@@ -2,22 +2,13 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; frame-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' data: blob:; font-src 'self'; frame-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>自动化脚本编辑器 V2.0</title>
+<script src="theme.js"></script>
 <link rel="stylesheet" href="vendor/fontawesome/css/fontawesome.min.css">
 <link rel="stylesheet" href="vendor/fontawesome/css/solid.min.css">
 <link rel="stylesheet" href="vendor/fontawesome/css/regular.min.css">
-<script>
-  /* 防主题闪烁：渲染前同步本地主题（与主控台共用 macrodriver-theme） */
-  (function () {
-    try {
-      var t = localStorage.getItem('macrodriver-theme');
-      if (!t) t = matchMedia('(prefers-color-scheme: light)').matches ? 'snow' : 'black';
-      if (t !== 'cream') document.documentElement.setAttribute('data-theme', t);
-    } catch (e) { /* 忽略 */ }
-  })();
-</script>
 <link rel="stylesheet" href="theme.css">
 <link rel="stylesheet" href="assistant.css">
 <link rel="stylesheet" href="assistant-rich.css">
@@ -62,6 +53,7 @@ body{font-family:var(--fui);background:var(--bg-deep);color:var(--txt);overflow:
 ::-webkit-scrollbar-track{background:transparent}
 ::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
 ::-webkit-scrollbar-thumb:hover{background:var(--border-lt)}
+button{font-family:inherit}
 input,select,textarea{font-family:var(--fui);font-size:11px;color:var(--txt);background:var(--bg);border:1px solid var(--border);border-radius:var(--rs);padding:3px 7px;outline:none;transition:border-color var(--t)}
 input:focus,select:focus{border-color:var(--acc)}
 input[type=number]{width:64px;font-family:var(--fmo);font-size:11px}
@@ -536,7 +528,6 @@ input[type=checkbox]{accent-color:var(--acc);width:13px;height:13px;cursor:point
     }
 })();
 </script>
-<script src="theme.js"></script>
 <script type="module" src="modules/auto/editor-app.js"></script>
 </body>
 </html>

@@ -3,25 +3,29 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::Instant;
 
+use once_cell::sync::Lazy;
 use regex::Regex;
 use serde_json::{Value, json};
 
+static READ_NUM_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"-?\d+(?:\.\d+)?").unwrap());
+
 use crate::automation::compiler::ExecNode;
 use crate::automation::detection::capture::{
-    capture_screen, full_primary_screen_region, parse_rect_value, resolve_region,
+    capture_screen, full_primary_screen_region, parse_rect_value_f64, resolve_region_f64,
 };
-use crate::automation::detection::color::check_color;
-use crate::automation::detection::template::match_template_file;
+use crate::automation::detection::color::{check_color, parse_hex_rgb};
+use crate::automation::detection::template::{TemplateMatchHit, match_template_file};
 use crate::automation::engine::{
-    ExecContext, do_click, execute_flow, get_hwnd, move_cursor_smooth, move_to_mode_xy,
-    read_data_input, resolve_value, send_key, send_unicode_text, value_as_f64, value_as_string,
-    value_truthy,
+    ExecContext, continue_flow, do_click, execute_flow, get_hwnd, move_cursor_rel_smooth, move_cursor_smooth,
+    move_to_mode_xy, read_data_input, resolve_value, send_key, send_scroll, send_unicode_text,
+    value_as_f64, value_as_string, value_truthy,
 };
 use crate::core::paths::AppPaths;
-use crate::engine::input_sendinput::{build_mouse_scroll_input, get_vk, send_inputs};
-use crate::executor::compiler::{batch_compiled_macro, compile_macro};
-use crate::executor::runner::{ExecOptions, HardwareInputSender, execute_macro_once};
-use crate::macro_io::parser::expand_macro_file_for_exec;
+use crate::engine::input_sendinput::get_vk;
+use crate::executor::compiler::CompiledStep;
+use crate::executor::manager::CachedCompilation;
+use crate::executor::runner::{ExecOptions, execute_macro_once};
+use crate::executor::ExecutionError;
 
 fn param_f64(node: &ExecNode, key: &str, default: f64, ctx: &ExecContext) -> f64 {
     node.params
@@ -49,6 +53,9 @@ fn param_bool(node: &ExecNode, key: &str, default: bool, ctx: &ExecContext) -> b
 }
 
 fn num_json(v: f64) -> Value {
+    if !v.is_finite() {
+        return json!(0);
+    }
     if (v - v.round()).abs() < 1e-9 && v >= (i64::MIN as f64) && v <= (i64::MAX as f64) {
         json!(v.round() as i64)
     } else {
@@ -61,7 +68,7 @@ pub fn dispatch_node(node: &ExecNode, ctx: &Arc<ExecContext>) -> Result<(), Stri
     match node.node_type.as_str() {
         // Flow & meta
         "flow/start" => {
-            execute_flow(&node.id, "next", ctx);
+            continue_flow(&node.id, "next", ctx);
         }
         "flow/end" => {
             ctx.stop_event.store(true, Ordering::Release);
@@ -73,15 +80,15 @@ pub fn dispatch_node(node: &ExecNode, ctx: &Arc<ExecContext>) -> Result<(), Stri
         "action/mouse_click" => handle_mouse_click(node, ctx)?,
         "action/key_action" => handle_key_action(node, ctx)?,
         "action/mouse_scroll" => handle_mouse_scroll(node, ctx)?,
-        "action/text_input" => handle_text_input(node, ctx),
+        "action/text_input" => handle_text_input(node, ctx)?,
         "action/wait" => {
             let ms = param_f64(node, "duration", 1000.0, ctx);
             ctx.sleep_ms(ms);
-            execute_flow(&node.id, "next", ctx);
+            continue_flow(&node.id, "next", ctx);
         }
         "action/mouse_move" => handle_mouse_move(node, ctx)?,
-        "action/mouse_move_rel" => handle_mouse_move_rel(node, ctx),
-        "action/mouse_button" => handle_mouse_button(node, ctx),
+        "action/mouse_move_rel" => handle_mouse_move_rel(node, ctx)?,
+        "action/mouse_button" => handle_mouse_button(node, ctx)?,
 
         // Control
         "control/if_else" => handle_if_else(node, ctx),
@@ -147,13 +154,16 @@ pub fn dispatch_node(node: &ExecNode, ctx: &Arc<ExecContext>) -> Result<(), Stri
         "utility/delay" => {
             let ms = param_f64(node, "ms", 1000.0, ctx);
             ctx.sleep_ms(ms);
-            execute_flow(&node.id, "next", ctx);
+            continue_flow(&node.id, "next", ctx);
         }
 
         // Monitors
         "monitor/monitor_color" | "monitor/monitor_ocr" | "monitor/monitor_timer" => {
             handle_monitor_node(node, ctx);
         }
+
+        // Plugins
+        "plugin/notify" => handle_notify(node, ctx),
 
         other => {
             return Err(format!("未实现的自动化节点类型: {other}"));
@@ -165,26 +175,32 @@ pub fn dispatch_node(node: &ExecNode, ctx: &Arc<ExecContext>) -> Result<(), Stri
 // ── Actions ────────────────────────────────────────────────────────────────
 
 fn handle_mouse_click(node: &ExecNode, ctx: &Arc<ExecContext>) -> Result<(), String> {
-    let x = param_f64(node, "x", 0.0, ctx).round() as i32;
-    let y = param_f64(node, "y", 0.0, ctx).round() as i32;
+    let x = param_f64(node, "x", 0.0, ctx);
+    let y = param_f64(node, "y", 0.0, ctx);
     let mode = param_str(node, "mode", "screen", ctx);
     let hwnd = get_hwnd(&param_str(node, "hwnd_var", "", ctx), ctx);
     let (px, py) = move_to_mode_xy(&mode, x, y, hwnd)?;
     let move_dur = param_f64(node, "move_duration", 0.0, ctx);
-    move_cursor_smooth(px, py, move_dur, "linear", ctx);
+    move_cursor_smooth(px, py, move_dur, "linear", ctx)?;
     ctx.sleep_ms(param_f64(node, "before_delay", 0.0, ctx));
+    if !ctx.can_start_action() {
+        return Ok(());
+    }
     do_click(
         &param_str(node, "button", "left", ctx),
         &param_str(node, "click_type", "click", ctx),
         param_f64(node, "hold_time", 0.0, ctx),
         ctx,
-    );
+    )?;
     ctx.sleep_ms(param_f64(node, "after_delay", 0.0, ctx));
-    execute_flow(&node.id, "next", ctx);
+    continue_flow(&node.id, "next", ctx);
     Ok(())
 }
 
 fn handle_key_action(node: &ExecNode, ctx: &Arc<ExecContext>) -> Result<(), String> {
+    if !ctx.can_start_action() {
+        return Ok(());
+    }
     let key = param_str(node, "key", "", ctx);
     let vk = get_vk(&key);
     if vk == 0 {
@@ -202,50 +218,51 @@ fn handle_key_action(node: &ExecNode, ctx: &Arc<ExecContext>) -> Result<(), Stri
         }
     }
     ctx.sleep_ms(delay);
-    execute_flow(&node.id, "next", ctx);
+    continue_flow(&node.id, "next", ctx);
     Ok(())
 }
 
 fn handle_mouse_scroll(node: &ExecNode, ctx: &Arc<ExecContext>) -> Result<(), String> {
     let delta = param_f64(node, "delta", 120.0, ctx).round() as i32;
     let delay = param_f64(node, "delay", 0.0, ctx);
-    send_inputs(&[build_mouse_scroll_input(delta)])?;
+    send_scroll(delta, ctx)?;
     ctx.sleep_ms(delay);
-    execute_flow(&node.id, "next", ctx);
+    continue_flow(&node.id, "next", ctx);
     Ok(())
 }
 
-fn handle_text_input(node: &ExecNode, ctx: &Arc<ExecContext>) {
+fn handle_text_input(node: &ExecNode, ctx: &Arc<ExecContext>) -> Result<(), String> {
     let text = param_str(node, "text", "", ctx);
     let interval = param_f64(node, "interval", 50.0, ctx);
     ctx.sleep_ms(param_f64(node, "before_delay", 0.0, ctx));
-    send_unicode_text(&text, interval, ctx);
-    execute_flow(&node.id, "next", ctx);
+    send_unicode_text(&text, interval, ctx)?;
+    continue_flow(&node.id, "next", ctx);
+    Ok(())
 }
 
 fn handle_mouse_move(node: &ExecNode, ctx: &Arc<ExecContext>) -> Result<(), String> {
-    let x = param_f64(node, "x", 0.0, ctx).round() as i32;
-    let y = param_f64(node, "y", 0.0, ctx).round() as i32;
+    let x = param_f64(node, "x", 0.0, ctx);
+    let y = param_f64(node, "y", 0.0, ctx);
     let mode = param_str(node, "mode", "screen", ctx);
     let hwnd = get_hwnd(&param_str(node, "hwnd_var", "", ctx), ctx);
     let (px, py) = move_to_mode_xy(&mode, x, y, hwnd)?;
     let duration = param_f64(node, "duration", 200.0, ctx);
     let easing = param_str(node, "easing", "ease_in_out", ctx);
-    move_cursor_smooth(px, py, duration, &easing, ctx);
-    execute_flow(&node.id, "next", ctx);
+    move_cursor_smooth(px, py, duration, &easing, ctx)?;
+    continue_flow(&node.id, "next", ctx);
     Ok(())
 }
 
-fn handle_mouse_move_rel(node: &ExecNode, ctx: &Arc<ExecContext>) {
+fn handle_mouse_move_rel(node: &ExecNode, ctx: &Arc<ExecContext>) -> Result<(), String> {
     let dx = param_f64(node, "dx", 0.0, ctx).round() as i32;
     let dy = param_f64(node, "dy", 0.0, ctx).round() as i32;
     let duration = param_f64(node, "duration", 200.0, ctx);
-    let (cx, cy) = crate::engine::coordinate::get_cursor_pos();
-    move_cursor_smooth(cx + dx, cy + dy, duration, "linear", ctx);
-    execute_flow(&node.id, "next", ctx);
+    move_cursor_rel_smooth(dx, dy, duration, ctx)?;
+    continue_flow(&node.id, "next", ctx);
+    Ok(())
 }
 
-fn handle_mouse_button(node: &ExecNode, ctx: &Arc<ExecContext>) {
+fn handle_mouse_button(node: &ExecNode, ctx: &Arc<ExecContext>) -> Result<(), String> {
     let button = param_str(node, "button", "left", ctx);
     if !matches!(button.as_str(), "left" | "right" | "middle") {
         ctx.log_error(
@@ -259,10 +276,11 @@ fn handle_mouse_button(node: &ExecNode, ctx: &Arc<ExecContext>) {
             &param_str(node, "click_type", "click", ctx),
             param_f64(node, "hold_time", 0.0, ctx),
             ctx,
-        );
+        )?;
     }
     ctx.sleep_ms(param_f64(node, "delay", 0.0, ctx));
-    execute_flow(&node.id, "next", ctx);
+    continue_flow(&node.id, "next", ctx);
+    Ok(())
 }
 
 // ── Control ────────────────────────────────────────────────────────────────
@@ -293,9 +311,9 @@ fn handle_if_else(node: &ExecNode, ctx: &Arc<ExecContext>) {
     };
     ctx.safe_set_result(&format!("{}.result", node.id), json!(result));
     if result {
-        execute_flow(&node.id, "true", ctx);
+        continue_flow(&node.id, "true", ctx);
     } else {
-        execute_flow(&node.id, "false", ctx);
+        continue_flow(&node.id, "false", ctx);
     }
 }
 
@@ -303,6 +321,10 @@ fn handle_loop_count(node: &ExecNode, ctx: &Arc<ExecContext>) {
     let count = param_f64(node, "count", 1.0, ctx).max(0.0) as i64;
     let counter_var = param_str(node, "counter_var", "", ctx);
     for i in 0..count {
+        if ctx.stop_event.load(Ordering::Relaxed) || ctx.has_goto() {
+            return;
+        }
+        ctx.wait_if_paused();
         if ctx.stop_event.load(Ordering::Relaxed) {
             return;
         }
@@ -310,14 +332,21 @@ fn handle_loop_count(node: &ExecNode, ctx: &Arc<ExecContext>) {
             ctx.safe_set_variable(&counter_var, json!(i));
         }
         execute_flow(&node.id, "body", ctx);
+        if ctx.has_goto() {
+            return;
+        }
     }
-    execute_flow(&node.id, "next", ctx);
+    continue_flow(&node.id, "next", ctx);
 }
 
 fn handle_loop_while(node: &ExecNode, ctx: &Arc<ExecContext>) {
     let max_iter = param_f64(node, "max_iterations", 10000.0, ctx).max(1.0) as usize;
     let check_at = param_str(node, "check_at", "start", ctx);
     for _ in 0..max_iter {
+        if ctx.stop_event.load(Ordering::Relaxed) || ctx.has_goto() {
+            return;
+        }
+        ctx.wait_if_paused();
         if ctx.stop_event.load(Ordering::Relaxed) {
             return;
         }
@@ -330,6 +359,9 @@ fn handle_loop_while(node: &ExecNode, ctx: &Arc<ExecContext>) {
             }
         }
         execute_flow(&node.id, "body", ctx);
+        if ctx.has_goto() {
+            return;
+        }
         if check_at == "end" {
             let mut visiting = std::collections::HashSet::new();
             crate::automation::engine::ensure_data_inputs(&node.id, ctx, &mut visiting);
@@ -339,88 +371,118 @@ fn handle_loop_while(node: &ExecNode, ctx: &Arc<ExecContext>) {
             }
         }
     }
-    execute_flow(&node.id, "next", ctx);
+    continue_flow(&node.id, "next", ctx);
 }
 
 fn compile_script_block(
     node: &ExecNode,
     ctx: &ExecContext,
-) -> Result<(Vec<crate::executor::compiler::CompiledStep>, ExecOptions, String), String> {
+) -> Result<(Arc<Vec<CompiledStep>>, ExecOptions), String> {
     let raw_path = param_str(node, "path", "", ctx);
     let rel = if Path::new(&raw_path).is_absolute() {
         ctx.paths.to_rel_slash(Path::new(&raw_path))
     } else {
         raw_path.clone()
     };
-    let expanded = expand_macro_file_for_exec(&ctx.paths, &rel)?;
-    let steps = compile_macro(&expanded, 100_000)?;
-    let batched = batch_compiled_macro(steps, true, 5.0, 20, true);
+    let batched = {
+        let cached = ctx
+            .compiled_macros_cache
+            .lock()
+            .get(&rel)
+            .and_then(|hit| hit.fresh_steps(ctx.config.revision()));
+        if let Some(steps) = cached {
+            steps
+        } else {
+            let compiled = CachedCompilation::compile(&ctx.paths, std::slice::from_ref(&rel), &ctx.config)?;
+            let steps = compiled.steps();
+            ctx.compiled_macros_cache.lock().insert(rel, compiled);
+            steps
+        }
+    };
     let mut opts = ExecOptions::from_config(&ctx.config);
     opts.speed_factor = param_f64(node, "speed_factor", 1.0, ctx).max(0.05);
     opts.timeline_mode = param_str(node, "timeline_mode", "absolute", ctx).to_ascii_lowercase();
     opts.runtime_random_offset = param_bool(node, "random_delay", false, ctx);
     opts.auto_release_modifiers = false;
-    Ok((batched, opts, raw_path))
+    Ok((batched, opts))
 }
 
 fn handle_call_script_sync(node: &ExecNode, ctx: &Arc<ExecContext>) -> Result<(), String> {
-    let (steps, opts, _name) = compile_script_block(node, ctx)?;
-    let sender = HardwareInputSender {
-        config: Arc::clone(&ctx.config),
-        interception: ctx.interception.clone(),
-    };
-    execute_macro_once(&steps, &ctx.stop_event, &ctx.pause_event, &sender, &opts)?;
-    execute_flow(&node.id, "next", ctx);
-    Ok(())
+    let (steps, opts) = compile_script_block(node, ctx)?;
+    let input = ctx.branch_input();
+    match execute_macro_once(&steps, &ctx.stop_event, &ctx.pause_event, input.as_ref(), &opts) {
+        Ok(()) => {
+            continue_flow(&node.id, "next", ctx);
+            Ok(())
+        }
+        Err(ExecutionError::Interrupted) => Ok(()),
+        Err(err) => Err(err.to_string()),
+    }
 }
 
 fn handle_call_script_async(node: &ExecNode, ctx: &Arc<ExecContext>) -> Result<(), String> {
-    let (steps, opts, name) = compile_script_block(node, ctx)?;
+    let (steps, opts) = compile_script_block(node, ctx)?;
+    if !ctx.can_start_action() {
+        return Ok(());
+    }
     let nid = node.id.clone();
     let ctx_cb = Arc::clone(ctx);
-    let _tid = ctx.task_pool.start_macro(
+    let branch = ctx.branch_input();
+    ctx.task_pool.start_macro(
         steps,
-        name,
         opts,
-        Arc::clone(&ctx.stop_event),
-        ctx.interception.clone(),
-        Arc::clone(&ctx.config),
-        move |_tid, status| {
+        ctx.new_branch_input(),
+        Arc::clone(&branch),
+        move |_tid, status, error| {
             if ctx_cb.stop_event.load(Ordering::Relaxed) {
                 return;
             }
-            if status == "completed" {
-                execute_flow(&nid, "completed", &ctx_cb);
-            } else {
-                execute_flow(&nid, "interrupted", &ctx_cb);
+            if let Some(message) = error {
+                ctx_cb.console.warn(format!("[自动化] 节点 {nid}：{message}"));
+                ctx_cb.log_error(message, Some(&nid), "runtime");
             }
+            let port = if status == "completed" { "completed" } else { "interrupted" };
+            ctx_cb.with_branch_input(branch, || execute_flow(&nid, port, &ctx_cb));
         },
-    );
-    execute_flow(&node.id, "next", ctx);
+    )?;
+    continue_flow(&node.id, "next", ctx);
     Ok(())
 }
 
 pub fn handle_wait_cond(node: &ExecNode, ctx: &Arc<ExecContext>) {
     let timeout_ms = param_f64(node, "timeout", 10000.0, ctx).max(0.0);
     let interval_ms = param_f64(node, "interval", 100.0, ctx).max(5.0);
-    let started = Instant::now();
+    let mut active_elapsed_ms = 0.0_f64;
+    let mut first_poll = true;
     loop {
+        if ctx.stop_event.load(Ordering::Relaxed) || ctx.has_goto() {
+            return;
+        }
+        ctx.wait_if_paused();
         if ctx.stop_event.load(Ordering::Relaxed) {
             return;
         }
+        let iter_start = Instant::now();
         let mut visiting = std::collections::HashSet::new();
         crate::automation::engine::ensure_data_inputs(&node.id, ctx, &mut visiting);
         let conds = eval_cond_inputs(node, ctx);
-        if !conds.is_empty() && conds.iter().all(|b| *b) {
-            execute_flow(&node.id, "met", ctx);
+        active_elapsed_ms += iter_start.elapsed().as_secs_f64() * 1000.0;
+        if (active_elapsed_ms < timeout_ms || (first_poll && timeout_ms == 0.0))
+            && !conds.is_empty() && conds.iter().all(|b| *b)
+        {
+            continue_flow(&node.id, "met", ctx);
             return;
         }
-        if started.elapsed().as_secs_f64() * 1000.0 >= timeout_ms {
+        if active_elapsed_ms >= timeout_ms {
             break;
         }
-        ctx.sleep_ms(interval_ms);
+        first_poll = false;
+        active_elapsed_ms += ctx.sleep_active_ms(interval_ms.min(timeout_ms - active_elapsed_ms));
+        if active_elapsed_ms >= timeout_ms {
+            break;
+        }
     }
-    execute_flow(&node.id, "timeout", ctx);
+    continue_flow(&node.id, "timeout", ctx);
 }
 
 pub fn handle_seq_check(node: &ExecNode, ctx: &Arc<ExecContext>) {
@@ -428,6 +490,10 @@ pub fn handle_seq_check(node: &ExecNode, ctx: &Arc<ExecContext>) {
     let max_retries = param_f64(node, "max_retries", 100.0, ctx).max(1.0) as usize;
     let mut attempts = 0;
     loop {
+        if ctx.stop_event.load(Ordering::Relaxed) || ctx.has_goto() {
+            return;
+        }
+        ctx.wait_if_paused();
         if ctx.stop_event.load(Ordering::Relaxed) {
             return;
         }
@@ -435,12 +501,12 @@ pub fn handle_seq_check(node: &ExecNode, ctx: &Arc<ExecContext>) {
         crate::automation::engine::ensure_data_inputs(&node.id, ctx, &mut visiting);
         let conds = eval_cond_inputs(node, ctx);
         if !conds.is_empty() && conds.iter().all(|b| *b) {
-            execute_flow(&node.id, "pass", ctx);
+            continue_flow(&node.id, "pass", ctx);
             return;
         }
         attempts += 1;
         if !retry || attempts >= max_retries {
-            execute_flow(&node.id, "fail", ctx);
+            continue_flow(&node.id, "fail", ctx);
             return;
         }
         ctx.sleep_ms(100.0);
@@ -456,20 +522,31 @@ fn handle_state_machine(node: &ExecNode, ctx: &Arc<ExecContext>) {
         .filter(|s| !s.is_empty())
         .collect();
     if states.is_empty() {
-        execute_flow(&node.id, "done", ctx);
+        continue_flow(&node.id, "done", ctx);
         return;
     }
     let mut current = 0usize;
-    while current < states.len() {
+    let mut steps = 0usize;
+    while current < states.len() && steps < 100_000 {
         if ctx.stop_event.load(Ordering::Relaxed) {
             return;
         }
+        ctx.wait_if_paused();
+        if ctx.stop_event.load(Ordering::Relaxed) {
+            return;
+        }
+        steps += 1;
+        let mut visiting = std::collections::HashSet::new();
+        crate::automation::engine::ensure_data_inputs(&node.id, ctx, &mut visiting);
         let conds = eval_cond_inputs(node, ctx);
         if !conds.is_empty() {
             if conds.iter().all(|b| *b) {
                 current += 1;
             } else if !fail_state.is_empty() {
                 if let Some(pos) = states.iter().position(|s| *s == fail_state) {
+                    if pos <= current {
+                        ctx.sleep_ms(100.0);
+                    }
                     current = pos;
                 } else {
                     current += 1;
@@ -481,35 +558,59 @@ fn handle_state_machine(node: &ExecNode, ctx: &Arc<ExecContext>) {
             ctx.sleep_ms(100.0);
         }
     }
-    execute_flow(&node.id, "done", ctx);
+    continue_flow(&node.id, "done", ctx);
 }
 
 // ── Detection ──────────────────────────────────────────────────────────────
 
-fn run_color_check(node: &ExecNode, ctx: &ExecContext) -> Result<(bool, String), String> {
+fn resolve_node_region(
+    node: &ExecNode,
+    rect_key: &str,
+    default_rect: [f64; 4],
+    zero_means_fullscreen: bool,
+    ctx: &ExecContext,
+) -> Result<[i32; 4], String> {
+    let rect = parse_rect_value_f64(node.params.get(rect_key), default_rect);
+    if zero_means_fullscreen && rect.iter().all(|&v| v == 0.0) {
+        return Ok(full_primary_screen_region());
+    }
     let mode = param_str(node, "mode", "screen", ctx);
-    let rect = parse_rect_value(node.params.get("rect"), [0, 0, 10, 10]);
     let hwnd = get_hwnd(&param_str(node, "hwnd_var", "", ctx), ctx);
-    let region = resolve_region(&mode, rect, hwnd)?;
-    let img = capture_screen(region)?;
+    resolve_region_f64(&mode, rect, hwnd)
+}
 
-    let target_hex = param_str(node, "target_color", "#FF0000", ctx);
-    let tol = param_f64(node, "tolerance", 10.0, ctx) as i32;
+fn run_color_check(node: &ExecNode, ctx: &ExecContext) -> Result<(bool, String), String> {
     let check_mode = param_str(node, "check_mode", "contain", ctx);
+    let track_change = check_mode == "change";
+    let target = if track_change {
+        (0, 0, 0)
+    } else {
+        parse_hex_rgb(&param_str(node, "target_color", "#FF0000", ctx))?
+    };
+    let region = resolve_node_region(node, "rect", [0.0, 0.0, 10.0, 10.0], false, ctx)?;
+    let img = Arc::new(capture_screen(region)?);
+    let tol = param_f64(node, "tolerance", 10.0, ctx) as i32;
     let sample_mode = param_str(node, "sample_mode", "center", ctx);
     let change_thresh = param_f64(node, "change_threshold", 10.0, ctx);
 
-    let last = ctx.last_capture_cache.lock().get(&node.id).cloned();
+    let last = {
+        let mut cache = ctx.last_capture_cache.lock();
+        if track_change {
+            cache.insert(node.id.clone(), Arc::clone(&img))
+        } else {
+            cache.remove(&node.id);
+            None
+        }
+    };
     let res = check_color(
         &img,
-        &target_hex,
+        target,
         tol,
         &check_mode,
         &sample_mode,
-        last.as_ref(),
+        last.as_deref(),
         change_thresh,
     );
-    ctx.last_capture_cache.lock().insert(node.id.clone(), img);
     Ok((res.found, res.actual_color))
 }
 
@@ -523,22 +624,19 @@ fn handle_check_color(node: &ExecNode, ctx: &Arc<ExecContext>) {
             }
             ctx.safe_set_result(&format!("{}.result", node.id), json!(found));
             ctx.safe_set_result(&format!("{}.color", node.id), json!(color_hex));
-            execute_flow(&node.id, if found { "match" } else { "no" }, ctx);
+            continue_flow(&node.id, if found { "match" } else { "no" }, ctx);
         }
         Err(err) => {
             ctx.console.warn(format!("[新引擎] 颜色检测出错：{err}"));
             ctx.safe_set_result(&format!("{}.result", node.id), json!(false));
             ctx.safe_set_result(&format!("{}.color", node.id), json!(""));
-            execute_flow(&node.id, "no", ctx);
+            continue_flow(&node.id, "no", ctx);
         }
     }
 }
 
 fn run_ocr_check(node: &ExecNode, ctx: &ExecContext) -> Result<(bool, String, Option<f64>), String> {
-    let mode = param_str(node, "mode", "screen", ctx);
-    let rect = parse_rect_value(node.params.get("rect"), [0, 0, 100, 30]);
-    let hwnd = get_hwnd(&param_str(node, "hwnd_var", "", ctx), ctx);
-    let region = resolve_region(&mode, rect, hwnd)?;
+    let region = resolve_node_region(node, "rect", [0.0, 0.0, 100.0, 30.0], false, ctx)?;
     let img = capture_screen(region)?;
 
     let match_text = param_str(node, "match_text", "", ctx);
@@ -548,21 +646,23 @@ fn run_ocr_check(node: &ExecNode, ctx: &ExecContext) -> Result<(bool, String, Op
     } else {
         None
     };
-    let cache_strategy = param_str(node, "cache_strategy", "time_interval", ctx);
+    let default_cache = if node.node_type.starts_with("monitor/") {
+        "disabled"
+    } else {
+        "time_interval"
+    };
+    let cache_strategy = param_str(node, "cache_strategy", default_cache, ctx);
     let cache_ms = param_f64(node, "cache_interval_ms", 100.0, ctx).max(0.0) as u64;
-    let last_img = ctx.last_capture_cache.lock().get(&node.id).cloned();
-
-    let det = ctx.ocr_engine.lock().detect(
-        &img,
+    let det = ctx.ocr_engine.detect(
+        img,
         &match_text,
         &match_mode,
         match_number,
         Some(&node.id),
-        last_img.as_ref(),
         &cache_strategy,
         cache_ms,
+        Some(&ctx.stop_event),
     )?;
-    ctx.last_capture_cache.lock().insert(node.id.clone(), img);
 
     if let Some(sv) = node.params.get("store_var").and_then(|v| v.as_str()) {
         if !sv.is_empty() {
@@ -584,19 +684,23 @@ fn run_ocr_check(node: &ExecNode, ctx: &ExecContext) -> Result<(bool, String, Op
 }
 
 fn handle_check_ocr(node: &ExecNode, ctx: &Arc<ExecContext>) {
-    match run_ocr_check(node, ctx) {
+    let result = run_ocr_check(node, ctx);
+    if ctx.stop_event.load(Ordering::Acquire) {
+        return;
+    }
+    match result {
         Ok((found, text, num_opt)) => {
             ctx.safe_set_result(&format!("{}.result", node.id), json!(found));
             ctx.safe_set_result(&format!("{}.text", node.id), json!(text));
             ctx.safe_set_result(&format!("{}.number", node.id), json!(num_opt.unwrap_or(0.0)));
-            execute_flow(&node.id, if found { "match" } else { "no" }, ctx);
+            continue_flow(&node.id, if found { "match" } else { "no" }, ctx);
         }
         Err(err) => {
             ctx.console.warn(format!("[新引擎] OCR检测出错：{err}"));
             ctx.safe_set_result(&format!("{}.result", node.id), json!(false));
             ctx.safe_set_result(&format!("{}.text", node.id), json!(""));
             ctx.safe_set_result(&format!("{}.number", node.id), json!(0));
-            execute_flow(&node.id, "no", ctx);
+            continue_flow(&node.id, "no", ctx);
         }
     }
 }
@@ -605,39 +709,39 @@ fn resolve_template_path(paths: &AppPaths, raw: &str) -> Result<std::path::PathB
     paths.resolve_template_file(raw)
 }
 
+fn image_hit_to_screen(region: [i32; 4], hit: &TemplateMatchHit) -> (i32, i32) {
+    (region[0] + hit.center_x, region[1] + hit.center_y)
+}
+
 fn handle_check_image(node: &ExecNode, ctx: &Arc<ExecContext>) {
     let tpl_raw = param_str(node, "template_path", "", ctx);
     if tpl_raw.is_empty() {
         ctx.safe_set_result(&format!("{}.result", node.id), json!(false));
-        execute_flow(&node.id, "no", ctx);
+        continue_flow(&node.id, "no", ctx);
         return;
     }
-    let rect = parse_rect_value(node.params.get("rect"), [0, 0, 0, 0]);
-    let region = if rect == [0, 0, 0, 0] {
-        full_primary_screen_region()
-    } else {
-        let mode = param_str(node, "mode", "screen", ctx);
-        let hwnd = get_hwnd(&param_str(node, "hwnd_var", "", ctx), ctx);
-        match resolve_region(&mode, rect, hwnd) {
-            Ok(r) => r,
-            Err(_) => full_primary_screen_region(),
-        }
-    };
     let method = param_str(node, "method", "tm_ccoeff_normed", ctx);
     let threshold = param_f64(node, "threshold", 0.8, ctx);
     let multi = param_bool(node, "multi_match", false, ctx);
 
-    let res = resolve_template_path(&ctx.paths, &tpl_raw).and_then(|tpl_path| {
-        capture_screen(region)
-            .and_then(|img| match_template_file(&img, &tpl_path, &method, threshold, multi))
+    let res = resolve_node_region(node, "rect", [0.0, 0.0, 0.0, 0.0], true, ctx).and_then(|region| {
+        let tpl_path = resolve_template_path(&ctx.paths, &tpl_raw)?;
+        let img = capture_screen(region)?;
+        let matched = match_template_file(&img, &tpl_path, &method, threshold, multi, &|| {
+            ctx.stop_event.load(Ordering::Acquire)
+        })?;
+        Ok((region, matched.0, matched.1))
     });
+    if ctx.stop_event.load(Ordering::Acquire) {
+        return;
+    }
 
     match res {
-        Ok((hits, _best_conf)) => {
+        Ok((region, hits, _best_conf)) => {
             let found = !hits.is_empty();
             let (mx, my) = hits
                 .first()
-                .map(|h| (h.center_x, h.center_y))
+                .map(|h| image_hit_to_screen(region, h))
                 .unwrap_or((0, 0));
             if found {
                 if let Some(sv) = node.params.get("store_var").and_then(|v| v.as_str()) {
@@ -645,7 +749,10 @@ fn handle_check_image(node: &ExecNode, ctx: &Arc<ExecContext>) {
                         if multi {
                             let arr: Vec<Value> = hits
                                 .iter()
-                                .map(|h| json!({ "x": h.center_x, "y": h.center_y }))
+                                .map(|h| {
+                                    let (sx, sy) = image_hit_to_screen(region, h);
+                                    json!({ "x": sx, "y": sy })
+                                })
                                 .collect();
                             ctx.safe_set_variable(sv, Value::Array(arr));
                         } else {
@@ -660,14 +767,14 @@ fn handle_check_image(node: &ExecNode, ctx: &Arc<ExecContext>) {
             ctx.safe_set_result(&format!("{}.result", node.id), json!(found));
             ctx.safe_set_result(&format!("{}.match_x", node.id), json!(mx));
             ctx.safe_set_result(&format!("{}.match_y", node.id), json!(my));
-            execute_flow(&node.id, if found { "match" } else { "no" }, ctx);
+            continue_flow(&node.id, if found { "match" } else { "no" }, ctx);
         }
         Err(err) => {
             ctx.console.warn(format!("[新引擎] 图像匹配出错：{err}"));
             ctx.safe_set_result(&format!("{}.result", node.id), json!(false));
             ctx.safe_set_result(&format!("{}.match_x", node.id), json!(0));
             ctx.safe_set_result(&format!("{}.match_y", node.id), json!(0));
-            execute_flow(&node.id, "no", ctx);
+            continue_flow(&node.id, "no", ctx);
         }
     }
 }
@@ -675,13 +782,9 @@ fn handle_check_image(node: &ExecNode, ctx: &Arc<ExecContext>) {
 fn handle_check_screen(node: &ExecNode, ctx: &Arc<ExecContext>) {
     let state = param_str(node, "state", "black", ctx);
     let threshold = param_f64(node, "threshold", 30.0, ctx);
-    let rect = parse_rect_value(node.params.get("region"), [0, 0, 0, 0]);
-    let region = if rect == [0, 0, 0, 0] {
-        full_primary_screen_region()
-    } else {
-        resolve_region("screen", rect, None).unwrap_or_else(|_| full_primary_screen_region())
-    };
-    let found = match capture_screen(region) {
+    let found = match resolve_node_region(node, "region", [0.0, 0.0, 0.0, 0.0], true, ctx)
+        .and_then(capture_screen)
+    {
         Ok(img) => {
             let n = (img.width * img.height).max(1) as f64;
             let mean_luma: f64 = img
@@ -694,45 +797,93 @@ fn handle_check_screen(node: &ExecNode, ctx: &Arc<ExecContext>) {
                 "black" => mean_luma < threshold,
                 "bright" => mean_luma > (255.0 - threshold),
                 "frozen" => {
-                    let mut cache = ctx.last_capture_cache.lock();
-                    let prev = cache.insert(node.id.clone(), img.clone());
+                    let img = Arc::new(img);
+                    let prev = ctx.last_capture_cache.lock().insert(node.id.clone(), Arc::clone(&img));
                     prev.is_some_and(|p| img.mean_abs_diff(&p) < threshold)
                 }
                 _ => false,
             }
         }
-        Err(_) => false,
+        Err(err) => {
+            ctx.console.warn(format!("[新引擎] 屏幕检测出错：{err}"));
+            false
+        }
     };
     ctx.safe_set_result(&format!("{}.result", node.id), json!(found));
-    execute_flow(&node.id, if found { "match" } else { "no" }, ctx);
+    continue_flow(&node.id, if found { "match" } else { "no" }, ctx);
 }
 
 // ── Variables & Utility ────────────────────────────────────────────────────
 
+fn coerce_typed_var(val: Value, vt: &str) -> Value {
+    match vt.trim().to_ascii_lowercase().as_str() {
+        "number" => num_json(value_as_f64(&val, 0.0)),
+        "boolean" | "bool" => json!(value_truthy(&val)),
+        _ => val,
+    }
+}
+
 pub fn handle_var_set(node: &ExecNode, ctx: &Arc<ExecContext>) {
     let mode = param_str(node, "mode", "set", ctx);
     if mode == "bind_window" {
-        let var_name = param_str(node, "var_name", "hwnd", ctx);
+        let var_name = node
+            .params
+            .get("name")
+            .or_else(|| node.params.get("var_name"))
+            .map(|v| value_as_string(&resolve_value(v, ctx)))
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "hwnd".to_string());
         let hwnd_opt = crate::engine::coordinate::get_window_at_mouse().map(|w| w.hwnd);
         if let Some(hw) = hwnd_opt {
             ctx.safe_set_variable(&var_name, json!(hw));
-            ctx.hwnd_cache.write().insert(var_name, hw);
         }
-    } else {
-        let name = param_str(node, "var_name", "", ctx);
+        continue_flow(&node.id, "next", ctx);
+        return;
+    }
+
+    if let Some(raw_list) = node.params.get("vars_json") {
+        let parsed_list = match raw_list {
+            Value::Array(arr) => Some(Value::Array(arr.clone())),
+            Value::String(s) if !s.trim().is_empty() => serde_json::from_str::<Value>(s).ok(),
+            _ => None,
+        };
+        if let Some(Value::Array(items)) = parsed_list {
+            for item in items {
+                let Some(obj) = item.as_object() else {
+                    continue;
+                };
+                let item_name = obj
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .trim();
+                if item_name.is_empty() {
+                    continue;
+                }
+                let raw_val = obj
+                    .get("value")
+                    .map(|v| resolve_value(v, ctx))
+                    .unwrap_or(json!(""));
+                let vt = obj.get("type").and_then(|v| v.as_str()).unwrap_or("string");
+                ctx.safe_set_variable(item_name, coerce_typed_var(raw_val, vt));
+            }
+        }
+    }
+
+    let name = node
+        .params
+        .get("name")
+        .or_else(|| node.params.get("var_name"))
+        .map(|v| value_as_string(&resolve_value(v, ctx)))
+        .map(|s| s.trim().to_string())
+        .unwrap_or_default();
+    if !name.is_empty() {
         let val_in = read_data_input(node, ctx, "val")
             .unwrap_or_else(|| node.params.get("value").map(|v| resolve_value(v, ctx)).unwrap_or(json!("")));
         let vt = param_str(node, "var_type", "string", ctx);
-        let typed = match vt.as_str() {
-            "number" => num_json(value_as_f64(&val_in, 0.0)),
-            "boolean" => json!(value_truthy(&val_in)),
-            _ => val_in,
-        };
-        if !name.is_empty() {
-            ctx.safe_set_variable(&name, typed);
-        }
+        ctx.safe_set_variable(&name, coerce_typed_var(val_in, &vt));
     }
-    execute_flow(&node.id, "next", ctx);
+    continue_flow(&node.id, "next", ctx);
 }
 
 pub fn handle_var_math(node: &ExecNode, ctx: &Arc<ExecContext>) {
@@ -773,7 +924,7 @@ pub fn handle_var_math(node: &ExecNode, ctx: &Arc<ExecContext>) {
             ctx.safe_set_variable(sv, rj);
         }
     }
-    execute_flow(&node.id, "next", ctx);
+    continue_flow(&node.id, "next", ctx);
 }
 
 pub fn handle_var_compare(node: &ExecNode, ctx: &Arc<ExecContext>) {
@@ -793,7 +944,7 @@ pub fn handle_var_compare(node: &ExecNode, ctx: &Arc<ExecContext>) {
         .unwrap_or_else(|| node.params.get("b").map(|v| resolve_value(v, ctx)).unwrap_or(json!(0)));
     let res = compare_values(&a_val, &b_val, op);
     ctx.safe_set_result(&format!("{}.result", node.id), json!(res));
-    execute_flow(&node.id, "next", ctx);
+    continue_flow(&node.id, "next", ctx);
 }
 
 pub fn handle_var_string(node: &ExecNode, ctx: &Arc<ExecContext>) {
@@ -825,7 +976,7 @@ pub fn handle_var_string(node: &ExecNode, ctx: &Arc<ExecContext>) {
         }
     }
     ctx.safe_set_result(&format!("{}.result", node.id), rj);
-    execute_flow(&node.id, "next", ctx);
+    continue_flow(&node.id, "next", ctx);
 }
 
 pub fn handle_var_convert(node: &ExecNode, ctx: &Arc<ExecContext>) {
@@ -846,7 +997,7 @@ pub fn handle_var_convert(node: &ExecNode, ctx: &Arc<ExecContext>) {
         }
     }
     ctx.safe_set_result(&format!("{}.result", node.id), res);
-    execute_flow(&node.id, "next", ctx);
+    continue_flow(&node.id, "next", ctx);
 }
 
 pub fn handle_utility_math_op(node: &ExecNode, ctx: &ExecContext) {
@@ -937,17 +1088,30 @@ pub fn handle_utility_string_op(node: &ExecNode, ctx: &ExecContext) {
     let op = param_str(node, "op", "concat", ctx);
     let res = match op.as_str() {
         "concat" => format!("{s}{pa}"),
-        "slice" | "substr" => {
-            let start = pb.parse::<usize>().unwrap_or(0);
-            let end = pc.parse::<usize>().unwrap_or_else(|_| s.chars().count());
+        "replace" => s.replace(&pa, &pb),
+        "upper" => s.to_uppercase(),
+        "lower" => s.to_lowercase(),
+        "trim" => s.trim().to_string(),
+        "substring" | "slice" | "substr" => {
+            let (start_s, end_s) = if !pa.is_empty() {
+                (pa.as_str(), pb.as_str())
+            } else {
+                (pb.as_str(), pc.as_str())
+            };
+            let start = start_s.trim().parse::<usize>().unwrap_or(0);
+            let total_chars = s.chars().count();
+            let end = if end_s.trim().is_empty() {
+                total_chars
+            } else {
+                end_s.trim().parse::<usize>().unwrap_or(total_chars)
+            };
             s.chars().skip(start).take(end.saturating_sub(start)).collect()
         }
         "split_index" => {
             let parts: Vec<&str> = if pa.is_empty() { vec![&s] } else { s.split(&pa).collect() };
-            let idx = pb.parse::<usize>().unwrap_or(0);
+            let idx = pb.trim().parse::<usize>().unwrap_or(0);
             parts.get(idx).copied().unwrap_or("").to_string()
         }
-        "replace" => s.replace(&pa, &pb),
         _ => s,
     };
     ctx.safe_set_result(&format!("{}.result", node.id), json!(res));
@@ -982,76 +1146,80 @@ fn handle_bookmark(node: &ExecNode, ctx: &ExecContext) {
 // ── Presets ────────────────────────────────────────────────────────────────
 
 fn handle_preset_click(node: &ExecNode, ctx: &Arc<ExecContext>) -> Result<(), String> {
-    let x = param_f64(node, "x", 0.0, ctx).round() as i32;
-    let y = param_f64(node, "y", 0.0, ctx).round() as i32;
+    let x = param_f64(node, "x", 0.0, ctx);
+    let y = param_f64(node, "y", 0.0, ctx);
     let mode = param_str(node, "mode", "screen", ctx);
     let hwnd = get_hwnd(&param_str(node, "hwnd_var", "", ctx), ctx);
     let (px, py) = move_to_mode_xy(&mode, x, y, hwnd)?;
-    move_cursor_smooth(px, py, param_f64(node, "move_duration", 150.0, ctx), "linear", ctx);
-    do_click(&param_str(node, "button", "left", ctx), "click", 0.0, ctx);
-    execute_flow(&node.id, "next", ctx);
+    move_cursor_smooth(px, py, param_f64(node, "move_duration", 150.0, ctx), "linear", ctx)?;
+    do_click(&param_str(node, "button", "left", ctx), "click", 0.0, ctx)?;
+    continue_flow(&node.id, "next", ctx);
     Ok(())
 }
 
 fn handle_preset_find_click(node: &ExecNode, ctx: &Arc<ExecContext>) {
     let tpl_raw = param_str(node, "template_path", "", ctx);
     if tpl_raw.is_empty() {
-        execute_flow(&node.id, "not_found", ctx);
+        continue_flow(&node.id, "not_found", ctx);
         return;
     }
-    let rect = parse_rect_value(node.params.get("rect"), [0, 0, 0, 0]);
-    let region = if rect == [0, 0, 0, 0] {
-        full_primary_screen_region()
-    } else {
-        let mode = param_str(node, "mode", "screen", ctx);
-        let hwnd = get_hwnd(&param_str(node, "hwnd_var", "", ctx), ctx);
-        resolve_region(&mode, rect, hwnd).unwrap_or_else(|_| full_primary_screen_region())
-    };
     let threshold = param_f64(node, "threshold", 0.8, ctx);
-    let found = resolve_template_path(&ctx.paths, &tpl_raw).and_then(|tpl_path| {
-        capture_screen(region)
-            .and_then(|img| match_template_file(&img, &tpl_path, "tm_ccoeff_normed", threshold, false))
+    let found = resolve_node_region(node, "rect", [0.0, 0.0, 0.0, 0.0], true, ctx).and_then(|region| {
+        let tpl_path = resolve_template_path(&ctx.paths, &tpl_raw)?;
+        let img = capture_screen(region)?;
+        let (hits, _) = match_template_file(&img, &tpl_path, "tm_ccoeff_normed", threshold, false, &|| {
+            ctx.stop_event.load(Ordering::Acquire)
+        })?;
+        Ok((region, hits))
     });
-    if let Ok((hits, _)) = found {
-        if let Some(hit) = hits.first() {
-            let _ = crate::engine::coordinate::set_cursor_pos(
-                region[0] + hit.center_x,
-                region[1] + hit.center_y,
-            );
-            do_click(&param_str(node, "button", "left", ctx), "click", 0.0, ctx);
-            execute_flow(&node.id, "found", ctx);
-            return;
+    if ctx.stop_event.load(Ordering::Acquire) {
+        return;
+    }
+    match found {
+        Ok((region, hits)) => {
+            if let Some(hit) = hits.first() {
+                let (sx, sy) = image_hit_to_screen(region, hit);
+                match move_cursor_smooth(sx, sy, 0.0, "linear", ctx)
+                    .and_then(|()| do_click(&param_str(node, "button", "left", ctx), "click", 0.0, ctx))
+                {
+                    Ok(()) => {
+                        continue_flow(&node.id, "found", ctx);
+                        return;
+                    }
+                    Err(err) => {
+                        ctx.console.warn(format!("[新引擎] 找图点击出错：{err}"));
+                        ctx.log_error(err, Some(&node.id), "input");
+                    }
+                }
+            }
+        }
+        Err(err) => {
+            ctx.console.warn(format!("[新引擎] 找图点击出错：{err}"));
         }
     }
-    execute_flow(&node.id, "not_found", ctx);
+    continue_flow(&node.id, "not_found", ctx);
 }
 
 fn handle_preset_read_text(node: &ExecNode, ctx: &Arc<ExecContext>) {
-    let mode = param_str(node, "mode", "screen", ctx);
-    let rect = parse_rect_value(node.params.get("rect"), [0, 0, 100, 30]);
-    let hwnd = get_hwnd(&param_str(node, "hwnd_var", "", ctx), ctx);
-    if let Ok(region) = resolve_region(&mode, rect, hwnd) {
+    if let Ok(region) = resolve_node_region(node, "rect", [0.0, 0.0, 100.0, 30.0], false, ctx) {
         if let Ok(img) = capture_screen(region) {
-            if let Ok(det) = ctx.ocr_engine.lock().detect(
-                &img,
+            if let Ok(det) = ctx.ocr_engine.detect(
+                img,
                 "",
                 "contain",
                 None,
                 None,
-                None,
                 "disabled",
                 0,
+                Some(&ctx.stop_event),
             ) {
                 let read_mode = param_str(node, "read_mode", "all", ctx);
                 let out_val = match read_mode.as_str() {
-                    "number" => Regex::new(r"[\d.]+")
-                        .ok()
-                        .and_then(|r| r.find(&det.text).map(|m| m.as_str().to_string()))
+                    "number" => READ_NUM_RE
+                        .find(&det.text)
+                        .map(|m| m.as_str().to_string())
                         .unwrap_or_default(),
-                    "text" => Regex::new(r"[\d.]+")
-                        .ok()
-                        .map(|r| r.replace_all(&det.text, "").trim().to_string())
-                        .unwrap_or_else(|| det.text.clone()),
+                    "text" => READ_NUM_RE.replace_all(&det.text, "").trim().to_string(),
                     _ => det.text,
                 };
                 if let Some(sv) = node.params.get("store_var").and_then(|v| v.as_str()) {
@@ -1062,10 +1230,18 @@ fn handle_preset_read_text(node: &ExecNode, ctx: &Arc<ExecContext>) {
             }
         }
     }
-    execute_flow(&node.id, "next", ctx);
+    continue_flow(&node.id, "next", ctx);
 }
 
 // ── Monitors ───────────────────────────────────────────────────────────────
+
+fn handle_notify(node: &ExecNode, ctx: &Arc<ExecContext>) {
+    let title = param_str(node, "title", "提示", ctx);
+    let message = param_str(node, "message", "操作完成", ctx);
+    ctx.console.info(format!("[消息提示] {title}: {message}"));
+    ctx.safe_set_result(&format!("{}.result", node.id), json!(true));
+    continue_flow(&node.id, "next", ctx);
+}
 
 fn handle_monitor_node(node: &ExecNode, ctx: &Arc<ExecContext>) {
     let interval_ms = param_f64(node, "interval", 100.0, ctx).max(5.0);
@@ -1073,68 +1249,109 @@ fn handle_monitor_node(node: &ExecNode, ctx: &Arc<ExecContext>) {
     let trigger_mode = param_str(node, "trigger_mode", "appear", ctx);
     let on_trigger = param_str(node, "on_trigger", "branch", ctx);
     let target_task = param_str(node, "target_task", "", ctx);
-    let repeat_count = param_f64(node, "repeat_count", 0.0, ctx) as usize;
+    let is_timer = node.node_type == "monitor/monitor_timer";
+    let auto_stop = if is_timer {
+        false
+    } else {
+        param_bool(node, "auto_stop", true, ctx)
+    };
+    let repeat_count = param_f64(node, "repeat_count", 0.0, ctx).max(0.0) as usize;
 
-    let started = Instant::now();
+    let mut active_elapsed_ms = 0.0_f64;
     let mut prev_found: Option<bool> = None;
-    let mut triggered = 0usize;
-    let mut timed_out = false;
+    let mut fired = 0usize;
 
     loop {
-        if ctx.stop_event.load(Ordering::Relaxed) {
+        if is_timer {
+            let wait_ms = if timeout_ms > 0.0 {
+                interval_ms.min((timeout_ms - active_elapsed_ms).max(0.0))
+            } else {
+                interval_ms
+            };
+            active_elapsed_ms += ctx.sleep_active_ms(wait_ms);
+            if timeout_ms > 0.0 && active_elapsed_ms >= timeout_ms {
+                if !ctx.stop_event.load(Ordering::Relaxed) && !ctx.has_goto() {
+                    continue_flow(&node.id, "timeout", ctx);
+                }
+                return;
+            }
+        }
+        if ctx.stop_event.load(Ordering::Relaxed) || ctx.has_goto() {
             return;
         }
         ctx.wait_if_paused();
-        if ctx.stop_event.load(Ordering::Relaxed) {
+        if ctx.stop_event.load(Ordering::Relaxed) || ctx.has_goto() {
             return;
         }
 
+        let iter_start = Instant::now();
         let found = match node.node_type.as_str() {
             "monitor/monitor_color" => run_color_check(node, ctx).map(|r| r.0).unwrap_or(false),
             "monitor/monitor_ocr" => run_ocr_check(node, ctx).map(|r| r.0).unwrap_or(false),
             _ => true,
         };
+        if ctx.stop_event.load(Ordering::Acquire) {
+            return;
+        }
+        active_elapsed_ms += iter_start.elapsed().as_secs_f64() * 1000.0;
 
-        let should_fire = match trigger_mode.as_str() {
-            "disappear" => prev_found == Some(true) && !found,
-            "change" => prev_found.is_some_and(|p| p != found),
-            _ => found,
+        let should_fire = if is_timer {
+            true
+        } else {
+            match trigger_mode.as_str() {
+                "disappear" => prev_found == Some(true) && !found,
+                "change" => prev_found.is_some_and(|p| p != found),
+                _ => found,
+            }
         };
         prev_found = Some(found);
 
         if should_fire {
-            triggered += 1;
-            if repeat_count == 0 || triggered >= repeat_count {
-                match on_trigger.as_str() {
-                    "stop_all" => {
-                        ctx.stop_event.store(true, Ordering::Release);
-                        ctx.task_pool.stop_all();
-                        break;
-                    }
-                    "stop_task" if !target_task.is_empty() => {
-                        ctx.task_pool.stop(&target_task);
-                    }
-                    "pause_task" if !target_task.is_empty() => {
-                        ctx.task_pool.pause(&target_task);
-                    }
-                    _ => {}
+            fired += 1;
+            match on_trigger.as_str() {
+                "stop_all" => {
+                    execute_flow(&node.id, "trigger", ctx);
+                    ctx.stop_event.store(true, Ordering::Release);
+                    ctx.task_pool.stop_all();
+                    return;
                 }
-                break;
+                "stop_task" if !target_task.is_empty() => {
+                    ctx.task_pool.stop(&target_task);
+                }
+                "pause_task" if !target_task.is_empty() => {
+                    ctx.task_pool.pause(&target_task);
+                }
+                _ => {}
+            }
+            execute_flow(&node.id, "trigger", ctx);
+
+            if ctx.stop_event.load(Ordering::Relaxed) {
+                return;
+            }
+            if (auto_stop && repeat_count == 0) || (repeat_count > 0 && fired >= repeat_count) {
+                return;
             }
         }
 
-        if timeout_ms > 0.0 && started.elapsed().as_secs_f64() * 1000.0 > timeout_ms {
-            timed_out = true;
-            break;
+        if timeout_ms > 0.0 && active_elapsed_ms >= timeout_ms {
+            if !ctx.stop_event.load(Ordering::Relaxed) && !ctx.has_goto() {
+                continue_flow(&node.id, "timeout", ctx);
+            }
+            return;
         }
-        ctx.sleep_ms(interval_ms);
-    }
-
-    if !ctx.stop_event.load(Ordering::Relaxed) {
-        if timed_out {
-            execute_flow(&node.id, "timeout", ctx);
-        } else {
-            execute_flow(&node.id, "trigger", ctx);
+        if !is_timer {
+            let wait_ms = if timeout_ms > 0.0 {
+                interval_ms.min((timeout_ms - active_elapsed_ms).max(0.0))
+            } else {
+                interval_ms
+            };
+            active_elapsed_ms += ctx.sleep_active_ms(wait_ms);
+            if timeout_ms > 0.0 && active_elapsed_ms >= timeout_ms {
+                if !ctx.stop_event.load(Ordering::Relaxed) && !ctx.has_goto() {
+                    continue_flow(&node.id, "timeout", ctx);
+                }
+                return;
+            }
         }
     }
 }
@@ -1182,6 +1399,33 @@ mod tests {
             flow_children: HashMap::new(),
             data_inputs: HashMap::new(),
         }
+    }
+
+    #[test]
+    fn script_block_recompiles_when_global_batching_or_action_limit_changes() {
+        let ctx = test_ctx_for(ExecGraph::default());
+        std::fs::create_dir_all(&ctx.paths.macros_dir).unwrap();
+        let file_name = format!("settings-{:016x}.json", rand::random::<u64>());
+        let path = ctx.paths.macros_dir.join(&file_name);
+        let mut rows = vec![json!(["kd", "w", 0]), json!(["kd", "e", 0])];
+        rows.extend((0..100).map(|_| json!(["wait", 1])));
+        std::fs::write(&path, json!(rows).to_string()).unwrap();
+        let node = mk_node("script", "script_block/call_script", json!({"path": format!("宏/{file_name}")}));
+        ctx.config.set_value("executor", "MAX_COMPILED_ACTIONS", json!(102));
+        ctx.config.set_value("executor", "ENABLE_BATCH_SEND", json!(true));
+        let (batched, _) = compile_script_block(&node, &ctx).unwrap();
+        assert_eq!(batched[0].kind, "batch");
+        let (cached, _) = compile_script_block(&node, &ctx).unwrap();
+        assert!(Arc::ptr_eq(&batched, &cached));
+
+        ctx.config.set_value("executor", "ENABLE_BATCH_SEND", json!(false));
+        let (unbatched, _) = compile_script_block(&node, &ctx).unwrap();
+        assert_eq!(unbatched[0].kind, "kd");
+        assert_eq!(unbatched.len(), 102);
+        ctx.config.set_value("executor", "MAX_COMPILED_ACTIONS", json!(100));
+        let err = compile_script_block(&node, &ctx).unwrap_err();
+        let _ = std::fs::remove_file(path);
+        assert!(err.contains("超过上限（100）"));
     }
 
     #[test]
@@ -1235,5 +1479,122 @@ mod tests {
         let mut sc = mk_node("sc1", "control/seq_check", json!({"retry": false, "max_retries": 1}));
         sc.data_inputs.insert("cond".into(), vec![DataInputSource { source_node_id: "source".into(), source_port: "result".into() }]);
         handle_seq_check(&sc, &ctx);
+
+        let hit = TemplateMatchHit {
+            center_x: 35,
+            center_y: 42,
+            score: 0.96,
+        };
+        assert_eq!(image_hit_to_screen([500, 300, 200, 200], &hit), (535, 342));
+
+        // var_set: single name + vars_json multi-list
+        let vs1 = mk_node("vs1", "variable/var_set", json!({"name": "hp", "value": "88", "var_type": "number"}));
+        handle_var_set(&vs1, &ctx);
+        assert_eq!(ctx.safe_get_variable("hp"), Some(json!(88)));
+
+        let vs2 = mk_node(
+            "vs2",
+            "variable/var_set",
+            json!({"vars_json": "[{\"name\":\"flag\",\"value\":\"true\",\"type\":\"boolean\"},{\"name\":\"label\",\"value\":\"ok\",\"type\":\"string\"}]"}),
+        );
+        handle_var_set(&vs2, &ctx);
+        assert_eq!(ctx.safe_get_variable("flag"), Some(json!(true)));
+        assert_eq!(ctx.safe_get_variable("label"), Some(json!("ok")));
+
+        // utility/string_op: upper, lower, trim, substring
+        let s_up = mk_node("su", "utility/string_op", json!({"op": "upper", "input_str": "Abc"}));
+        handle_utility_string_op(&s_up, &ctx);
+        assert_eq!(ctx.safe_get_result("su.result"), Some(json!("ABC")));
+
+        let s_trim = mk_node("st", "utility/string_op", json!({"op": "trim", "input_str": "  hi  "}));
+        handle_utility_string_op(&s_trim, &ctx);
+        assert_eq!(ctx.safe_get_result("st.result"), Some(json!("hi")));
+
+        let s_sub = mk_node("ss", "utility/string_op", json!({"op": "substring", "input_str": "abcdef", "param_a": "1", "param_b": "4"}));
+        handle_utility_string_op(&s_sub, &ctx);
+        assert_eq!(ctx.safe_get_result("ss.result"), Some(json!("bcd")));
+
+        // plugin/notify executes cleanly without error
+        let pn = mk_node("pn1", "plugin/notify", json!({"title": "t", "message": "m"}));
+        assert!(dispatch_node(&pn, &ctx).is_ok());
+        assert_eq!(ctx.safe_get_result("pn1.result"), Some(json!(true)));
+
+        // monitor_timer repeat_count = 2 fires trigger twice via counter node
+        let mut g_tm = ExecGraph::default();
+        g_tm.nodes.insert(
+            "tm".into(),
+            ExecNode {
+                id: "tm".into(),
+                node_type: "monitor/monitor_timer".into(),
+                params: json!({"interval": 5, "repeat_count": 2}).as_object().unwrap().clone(),
+                position: json!({}),
+                flow_children: HashMap::from([("trigger".into(), vec!["inc".into()])]),
+                data_inputs: HashMap::new(),
+            },
+        );
+        g_tm.nodes.insert(
+            "inc".into(),
+            mk_node("inc", "variable/var_math", json!({"op": "add", "a": "${ticks}", "b": 1, "store_var": "ticks"})),
+        );
+        g_tm.variables.insert("ticks".into(), json!({"init": 0}));
+        let ctx_tm = test_ctx_for(g_tm);
+        handle_monitor_node(&ctx_tm.graph.nodes["tm"], &ctx_tm);
+        assert_eq!(ctx_tm.safe_get_variable("ticks"), Some(json!(2)));
+    }
+
+    #[test]
+    fn wait_cond_timeout_is_not_delayed_by_long_poll_interval() {
+        let g = crate::automation::compiler::parse_graph(&json!({
+            "variables": { "timed_out": {"init": false} },
+            "graph": {
+                "nodes": [
+                    {"id": "s", "type": "flow/start", "params": {}},
+                    {"id": "c", "type": "utility/const_bool", "params": {"value": false}},
+                    {"id": "w", "type": "control/wait_cond", "params": {"timeout": 20, "interval": 220}},
+                    {"id": "set", "type": "variable/var_set", "params": {"name": "timed_out", "value": true, "var_type": "boolean"}},
+                    {"id": "e", "type": "flow/end", "params": {}}
+                ],
+                "connections": [
+                    {"from": {"node": "s", "port": "next"}, "to": {"node": "w", "port": "in"}, "type": "flow"},
+                    {"from": {"node": "c", "port": "value"}, "to": {"node": "w", "port": "cond"}, "type": "data"},
+                    {"from": {"node": "w", "port": "timeout"}, "to": {"node": "set", "port": "in"}, "type": "flow"},
+                    {"from": {"node": "set", "port": "next"}, "to": {"node": "e", "port": "in"}, "type": "flow"}
+                ]
+            }
+        }));
+        let ctx = test_ctx_for(g);
+        let started = Instant::now();
+        crate::automation::engine::execute_graph(&ctx);
+        let elapsed_ms = started.elapsed().as_millis();
+        assert_eq!(ctx.safe_get_variable("timed_out"), Some(json!(true)));
+        assert!(
+            elapsed_ms < 120,
+            "wait_cond took {elapsed_ms}ms with 20ms timeout and 220ms interval"
+        );
+    }
+
+    #[test]
+    fn monitor_timer_timeout_is_not_delayed_by_long_interval() {
+        let g = crate::automation::compiler::parse_graph(&json!({
+            "variables": { "timed_out": {"init": false}, "fired": {"init": false} },
+            "graph": {
+                "nodes": [
+                    {"id": "m", "type": "monitor/monitor_timer", "params": {"timeout": 20, "interval": 220}},
+                    {"id": "f", "type": "variable/var_set", "params": {"name": "fired", "value": true, "var_type": "boolean"}},
+                    {"id": "t", "type": "variable/var_set", "params": {"name": "timed_out", "value": true, "var_type": "boolean"}}
+                ],
+                "connections": [
+                    {"from": {"node": "m", "port": "trigger"}, "to": {"node": "f", "port": "in"}, "type": "flow"},
+                    {"from": {"node": "m", "port": "timeout"}, "to": {"node": "t", "port": "in"}, "type": "flow"}
+                ]
+            }
+        }));
+        let ctx = test_ctx_for(g);
+        let started = Instant::now();
+        handle_monitor_node(&ctx.graph.nodes["m"], &ctx);
+        let elapsed_ms = started.elapsed().as_millis();
+        assert_eq!(ctx.safe_get_variable("fired"), Some(json!(false)));
+        assert_eq!(ctx.safe_get_variable("timed_out"), Some(json!(true)));
+        assert!(elapsed_ms < 120, "monitor_timer took {elapsed_ms}ms");
     }
 }

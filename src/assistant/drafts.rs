@@ -86,8 +86,8 @@ fn macro_rows_stats(rows: &[Value], prefix: &str, depth: usize) -> Result<(usize
 
         match cmd {
             "loop" => {
-                if row.len() != 3 || !number_in_range(&row[1], 1.0, 1000.0, true) {
-                    return Err(DraftError(format!("{label}的循环次数应为 1 到 1000 的整数")));
+                if row.len() != 3 || !number_in_range(&row[1], 0.0, 1000.0, true) {
+                    return Err(DraftError(format!("{label}的循环次数应为 0 到 1000 的整数")));
                 }
                 let Some(body) = row[2].as_array() else {
                     return Err(DraftError(format!("{label} · 动作应为动作数组，最多包含 1200 行")));
@@ -638,15 +638,14 @@ fn check_flow(graph: &mut ExecGraph) -> Result<(), DraftError> {
                     "等待条件节点 {node_id} 需要连接条件输入与超时出口"
                 )));
             }
-            let has_detection = cond_sources.iter().any(|s| {
-                graph
-                    .nodes
-                    .get(&s.source_node_id)
-                    .is_some_and(|n| n.node_type.starts_with("detection/"))
+            let has_flow_detection = cond_sources.iter().any(|s| {
+                graph.nodes.get(&s.source_node_id).is_some_and(|n| {
+                    n.node_type.starts_with("detection/") && !n.flow_children.is_empty()
+                })
             });
-            if has_detection {
+            if has_flow_detection {
                 extra_warnings.push(format!(
-                    "等待条件节点 {node_id} 不会重新运行普通检测节点。轮询检测请使用监视节点或有限循环。"
+                    "等待条件节点 {node_id} 引用的流程检测节点带有流程后续分支，不会在此处重新执行。若仅作为条件轮询请使用纯数据连线或监视节点。"
                 ));
             }
         }

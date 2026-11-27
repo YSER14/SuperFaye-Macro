@@ -253,6 +253,26 @@ impl AppPaths {
     }
 }
 
+/// Returns true for secret-bearing dotfiles or private key/certificate extensions.
+pub fn is_sensitive_secret_file(path: &Path) -> bool {
+    let name = path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    if name == ".env" || name.starts_with(".env.") {
+        return true;
+    }
+    matches!(
+        path.extension()
+            .and_then(|s| s.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase()
+            .as_str(),
+        "pem" | "key" | "pfx" | "p12"
+    )
+}
+
 fn strip_prefix_ci<'a>(path: &'a Path, base: &Path) -> Option<PathBuf> {
     if let Ok(rel) = path.strip_prefix(base) {
         return Some(rel.to_path_buf());
@@ -351,10 +371,10 @@ mod tests {
 
     #[test]
     fn reject_parent_escape() {
-        let base = Path::new("d:/workspace/macros");
-        assert!(AppPaths::resolve_under(base, "../secret.json").is_err());
-        assert!(AppPaths::resolve_under(base, "C:/Windows/win.ini").is_err());
-        let ok = AppPaths::resolve_under(base, "录制宏\\demo.json").unwrap();
+        let base = std::env::temp_dir().join("sf_test_macros");
+        assert!(AppPaths::resolve_under(&base, "../secret.json").is_err());
+        assert!(AppPaths::resolve_under(&base, "C:/Windows/win.ini").is_err());
+        let ok = AppPaths::resolve_under(&base, "录制宏\\demo.json").unwrap();
         assert!(ok.ends_with("录制宏/demo.json") || ok.ends_with("录制宏\\demo.json"));
     }
 }

@@ -20,7 +20,7 @@ var _portNameMap = {
         return _portNameMap[name] || name;
     }
 
-    // 后端（Python 节点注册表）给的 params_schema 只有英文参数键 + 中文 description，
+    // 后端节点注册表给的 params_schema 只有英文参数键 + 中文 description，
     // 没有 label / 下拉选项整理 / 变量按钮等前端字段。这里把两边合并成前端要的形状：
     //   · 中文标签优先取内置表，其次用 description，再退到英文键名
     //   · boolean/data_bool → bool，array+format=region → region，string+options → enum
@@ -145,9 +145,9 @@ var _portNameMap = {
                     params_schema: { mode:{type:'enum',label:'坐标模式',default:'screen',options:['screen','window','relative'],coordMode:true},
                         rect:{type:'region',label:'检测区域',default:[0,0,10,10],coordMode:true}, hwnd_var:{type:'string',label:'窗口变量',default:'',varRef:true},
                         target_color:{type:'color',label:'目标颜色',default:'#FF0000'}, tolerance:{type:'number',label:'容差',default:10,varRef:true},
-                        check_mode:{type:'enum',label:'检测方式',default:'contain',options:['exact','contain','change']},
+                        check_mode:{type:'enum',label:'检测方式（contain=区域内包含）',default:'contain',options:['exact','contain','change']},
                         change_threshold:{type:'number',label:'变化阈值',default:10,showWhen:'check_mode=change',varRef:true},
-                        sample_mode:{type:'enum',label:'采样方式',default:'center',options:['center','mean','max_diff']},
+                        sample_mode:{type:'enum',label:'采样方式（contain 时扫描全区域；max_diff=最接近像素）',default:'center',options:['center','mean','max_diff','closest']},
                         store_var:{type:'string',label:'存入变量',default:''} }},
                 'detection/check_ocr': { display_name: 'OCR识别', color: '#eab308', category: 'detection', icon: 'fa-solid fa-language',
                     inputs: [{name:'in',type:'flow'}], outputs: [{name:'match',type:'flow'},{name:'no',type:'flow'},{name:'result',type:'boolean'},{name:'text',type:'string'},{name:'number',type:'number'}],
@@ -156,7 +156,7 @@ var _portNameMap = {
                         match_text:{type:'string',label:'匹配文本',default:''},
                         match_mode:{type:'enum',label:'匹配方式',default:'contain',options:['contain','exact','regex','number_gt','number_lt','number_eq']},
                         match_number:{type:'number',label:'比较数值',default:0,showWhen:'match_mode=number_gt,number_lt,number_eq'},
-                        engine:{type:'enum',label:'OCR引擎',default:'rapidocr',options:['rapidocr']},
+                        engine:{type:'enum',label:'OCR引擎（系统 WinRT）',default:'winrt',options:['winrt','rapidocr']},
                         store_var:{type:'string',label:'存入变量',default:''},
                         store_number:{type:'string',label:'存入变量',default:'',showWhen:'match_mode=number_gt,number_lt,number_eq'},
                         cache_strategy:{type:'enum',label:'缓存策略',default:'time_interval',options:['frame_diff','time_interval','disabled']},
@@ -200,7 +200,7 @@ var _portNameMap = {
                         match_text:{type:'string',label:'匹配文本',default:'',varRef:true},
                         match_mode:{type:'enum',label:'匹配方式',default:'contain',options:['contain','exact','regex','number_gt','number_lt','number_eq']},
                         match_number:{type:'number',label:'比较数值',default:0,varRef:true,showWhen:'match_mode=number_gt,number_lt,number_eq'},
-                        engine:{type:'enum',label:'OCR引擎',default:'rapidocr',options:['rapidocr']},
+                        engine:{type:'enum',label:'OCR引擎（系统 WinRT）',default:'winrt',options:['winrt','rapidocr']},
                         interval:{type:'number',label:'检测间隔',default:200,varRef:true}, timeout:{type:'number',label:'超时',default:0,varRef:true},
                         on_trigger:{type:'enum',label:'触发行为',default:'branch',options:['branch','stop_all','stop_task','pause_task']},
                         store_var:{type:'string',label:'存入变量',default:'',varRef:true},
@@ -249,7 +249,7 @@ var _portNameMap = {
                         template_path:{type:'path',label:'模板图片',default:'',browseType:'template'},
                         threshold:{type:'number',label:'匹配阈值',default:0.8,varRef:true},
                         method:{type:'enum',label:'匹配方法',default:'tm_ccoeff_normed',options:['tm_ccoeff_normed','tm_ccorr_normed','tm_sqdiff_normed']},
-                        multi_match:{type:'bool',label:'多目标匹配',default:false},
+                        multi_match:{type:'bool',label:'多目标匹配（最多10个）',default:false},
                         store_var:{type:'string',label:'位置变量',default:'',varRef:true} }},
                 'detection/check_screen': { display_name: '屏幕状态', color: '#eab308', category: 'detection', icon: 'fa-solid fa-display',
                     inputs: [{name:'in',type:'flow'}], outputs: [{name:'match',type:'flow'},{name:'no',type:'flow'},{name:'result',type:'boolean'}],
@@ -292,7 +292,7 @@ var _portNameMap = {
                     params_schema: { mode:{type:'enum',label:'坐标模式',default:'screen',options:['screen','window','relative'],coordMode:true},
                         rect:{type:'region',label:'检测区域',default:[0,0,100,30],coordMode:true,varRef:true}, hwnd_var:{type:'string',label:'窗口变量',default:'',varRef:true},
                         read_mode:{type:'enum',label:'读取模式',default:'all',options:['all','number','text']},
-                        engine:{type:'enum',label:'OCR引擎',default:'rapidocr',options:['rapidocr']},
+                        engine:{type:'enum',label:'OCR引擎（系统 WinRT）',default:'winrt',options:['winrt','rapidocr']},
                         store_var:{type:'string',label:'存入变量',default:'',varRef:true} }},
                 'utility/const_number': { display_name: '数字常量', color: '#d8d8d8ff', category: 'utility', icon: 'fa-solid fa-hashtag',
                     inputs: [], outputs: [{name:'value',type:'number'}],

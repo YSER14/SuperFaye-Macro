@@ -1,7 +1,7 @@
-/* 富回复渲染：Markdown 子集 + DSH 风格组件块。
+/* 富回复渲染：Markdown 子集 + 结构化 UI 组件块。
  *
  * 模型回复的 message 字段会带 Markdown（标题、列表、表格、代码块），
- * 关键结论可以再包一个 ```ui / ```dsh-ui 组件块，内容是一段 JSON：
+ * 关键结论可以再包一个 ```ui 组件块，内容是一段 JSON：
  *
  *   ```ui
  *   {"type":"callout","tone":"warning","content":"这一段会覆盖已保存的宏。"}
@@ -12,7 +12,7 @@
  */
 
 const MAX_DEPTH = 4;
-const RICH_FENCE = /^(?:ui|dsh-ui|dshui|rich|component|components)$/i;
+const RICH_FENCE = /^(?:ui|rich|component|components)$/i;
 const SAFE_SCHEMES = new Set(['http:', 'https:', 'mailto:']);
 
 const FENCE_RE = /^[ \t]*(`{3,}|~{3,})[ \t]*([^\s`]*)[ \t]*$/;
@@ -594,7 +594,7 @@ async function copyText(text) {
   }
 }
 
-/* ── DSH 风格组件 ─────────────────────────────────────────────────────── */
+/* ── 结构化 UI 组件 ───────────────────────────────────────────────────── */
 
 function normalizeTone(tone, fallback = 'info') {
   if (!tone) return fallback;

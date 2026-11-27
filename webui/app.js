@@ -1,5 +1,6 @@
 import { state, q, qa, showToast } from './modules/app-core.js';
 import { renderGlobalParams, bindParamsActions } from './modules/params.js';
+import { bindFontSettings, loadFontSettings } from './modules/font-settings.js';
 import {
   refreshMacros,
   refreshBindings,
@@ -33,7 +34,7 @@ const TAB_META = {
   macro: { title: '绑定与方案', context: () => state.activeSchemeName ? `当前方案：${state.activeSchemeName}` : '触发键与方案管理' },
   editor: { title: '宏工作台', context: () => state.selectedMacro || '未选择宏文件 · 可直接拖拽积木块编排' },
   automation: { title: '节点自动化', context: () => '可视化流程画布与 AI 搭建' },
-  params: { title: '全局设置', context: () => '执行引擎、录制与轨迹参数' },
+  params: { title: '全局设置', context: () => '界面外观、执行引擎与录制参数' },
   console: { title: '系统控制台', context: () => '实时运行状态与诊断输出' },
 };
 
@@ -71,7 +72,7 @@ export async function switchTab(tabName) {
   syncTopbarHeader();
 
   if (tabName === 'params') {
-    await renderGlobalParams();
+    await Promise.all([loadFontSettings(), renderGlobalParams()]);
   }
   if (tabName === 'macro') {
     await refreshSchemes().catch((err) => showToast(`加载方案失败：${err.message}`));
@@ -127,8 +128,19 @@ function bindAutomationFullscreenBridge() {
 
 async function waitForApi(maxRetries = 20, intervalMs = 300) {
   for (let i = 0; i < maxRetries; i++) {
-    if (window.pywebview && window.pywebview.api && typeof window.pywebview.api.health === 'function') {
-      return true;
+    const api = window.pywebview && window.pywebview.api;
+    if (api && typeof api.health === 'function') {
+      try {
+        const ret = await Promise.race([
+          api.health(),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('health timeout')), intervalMs)),
+        ]);
+        if (ret && (ret.ok === true || ret.status === 'ok')) {
+          return true;
+        }
+      } catch (_err) {
+        // Proxy 一注入 health 就是函数，还需等到宿主真正响应。
+      }
     }
     await new Promise((r) => setTimeout(r, intervalMs));
   }
@@ -142,6 +154,7 @@ async function bootstrap() {
   bindSidebarCollapse();
   bindTabs();
   bindAutomationFullscreenBridge();
+  bindFontSettings();
   bindParamsActions();
   bindMacroActions();
   bindSchemeActions();

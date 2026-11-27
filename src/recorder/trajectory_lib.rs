@@ -82,50 +82,30 @@ pub fn compute_action_delay_ns_list(
 
     let base_ns = (cfg.action_embed_delay_ms * 1_000_000.0).max(0.0) as u64;
     let mut next_press_pos = vec![None; actions.len()];
-    let mut next_press_idx = actions.len() - 1;
+    let mut next_press_idx: Option<usize> = None;
     for i in (0..actions.len()).rev() {
+        next_press_pos[i] = next_press_idx;
         if matches!(actions[i].cmd.as_str(), "kd" | "md") {
-            next_press_idx = i;
+            next_press_idx = Some(i);
         }
-        next_press_pos[i] = Some(next_press_idx);
     }
 
     let ratio = cfg.action_embed_max_ratio_to_next_press.clamp(0.0, 1.0);
     let mut delays = Vec::with_capacity(actions.len());
     for (i, act) in actions.iter().enumerate() {
         let mut delay_ns = base_ns;
-        if let Some(j) = next_press_pos.get(i + 1).copied().flatten() {
+        if let Some(j) = next_press_pos[i] {
             let gap_ns = actions[j].ts_ns.saturating_sub(act.ts_ns);
             let cap_ns = ((gap_ns as f64) * ratio) as u64;
             delay_ns = delay_ns.min(cap_ns);
         }
+        if let Some(next_act) = actions.get(i + 1) {
+            let next_gap_ns = next_act.ts_ns.saturating_sub(act.ts_ns);
+            delay_ns = delay_ns.min(next_gap_ns);
+        }
         delays.push(delay_ns);
     }
     delays
-}
-
-fn slice_track_linear(tr: &TrackSegment, a_ns: u64, b_ns: u64) -> Option<TrackSegment> {
-    if tr.end_ns <= tr.start_ns {
-        return None;
-    }
-    let total_ns = (tr.end_ns - tr.start_ns) as f64;
-    let a = a_ns.clamp(tr.start_ns, tr.end_ns);
-    let b = b_ns.clamp(tr.start_ns, tr.end_ns);
-    if b <= a {
-        return None;
-    }
-    let ratio = ((b - a) as f64) / total_ns;
-    let dx = tr.dx * ratio;
-    let dy = tr.dy * ratio;
-    if dx == 0.0 && dy == 0.0 {
-        return None;
-    }
-    Some(TrackSegment {
-        start_ns: a,
-        end_ns: b,
-        dx,
-        dy,
-    })
 }
 
 pub fn split_tracks_with_action_embedding(
@@ -147,17 +127,51 @@ pub fn split_tracks_with_action_embedding(
     let mut result = Vec::new();
     for tr in tracks {
         let mut cursor = tr.start_ns;
+        let mut rem_dx = tr.dx;
+        let mut rem_dy = tr.dy;
         for &(ts, hole_ns) in &action_events {
             if ts <= cursor || ts >= tr.end_ns {
                 continue;
             }
-            if let Some(left) = slice_track_linear(tr, cursor, ts) {
-                result.push(left);
+            let right_start = tr.end_ns.min(ts.saturating_add(hole_ns));
+            let left_dur = ts - cursor;
+            let right_dur = tr.end_ns - right_start;
+            let active_dur = left_dur + right_dur;
+            if active_dur == 0 {
+                cursor = right_start;
+                continue;
             }
-            cursor = tr.end_ns.min(ts.saturating_add(hole_ns));
+            let ratio = (left_dur as f64) / (active_dur as f64);
+            let ldx = rem_dx * ratio;
+            let ldy = rem_dy * ratio;
+            if ldx != 0.0 || ldy != 0.0 {
+                result.push(TrackSegment {
+                    start_ns: cursor,
+                    end_ns: ts,
+                    dx: ldx,
+                    dy: ldy,
+                });
+            }
+            rem_dx -= ldx;
+            rem_dy -= ldy;
+            cursor = right_start;
         }
-        if let Some(tail) = slice_track_linear(tr, cursor, tr.end_ns) {
-            result.push(tail);
+        if cursor < tr.end_ns && (rem_dx != 0.0 || rem_dy != 0.0) {
+            result.push(TrackSegment {
+                start_ns: cursor,
+                end_ns: tr.end_ns,
+                dx: rem_dx,
+                dy: rem_dy,
+            });
+        } else if cursor >= tr.end_ns && (rem_dx != 0.0 || rem_dy != 0.0) {
+            // If an action hole consumed the tail, attach any remaining displacement to the
+            // immediately preceding slice from this track rather than dropping it.
+            if let Some(last) = result.last_mut() {
+                if last.end_ns <= tr.end_ns && last.start_ns >= tr.start_ns {
+                    last.dx += rem_dx;
+                    last.dy += rem_dy;
+                }
+            }
         }
     }
     result
@@ -165,7 +179,7 @@ pub fn split_tracks_with_action_embedding(
 
 fn split_by_hard_boundaries(
     tracks: &[TrackSegment],
-    hard_boundaries: &HashSet<u64>,
+    sorted_action_ts: &[u64],
 ) -> Vec<Vec<TrackSegment>> {
     if tracks.is_empty() {
         return Vec::new();
@@ -175,7 +189,13 @@ fn split_by_hard_boundaries(
     for pair in tracks.windows(2) {
         let prev = &pair[0];
         let nxt = &pair[1];
-        if hard_boundaries.contains(&prev.end_ns) || hard_boundaries.contains(&nxt.start_ns) {
+        // Split whenever any action timestamp falls at or between prev.end_ns and nxt.start_ns,
+        // including inside an action-embedding gap or pause between mouse samples.
+        let lo = prev.end_ns;
+        let hi = nxt.start_ns.max(lo);
+        let idx = sorted_action_ts.partition_point(|&ts| ts < lo);
+        let crossed = sorted_action_ts.get(idx).is_some_and(|&ts| ts <= hi);
+        if crossed {
             chunks.push(cur);
             cur = vec![nxt.clone()];
         } else {
@@ -197,6 +217,8 @@ pub fn apply_sliding_window_filter(tracks: &[TrackSegment], window_size: usize) 
     if w <= 1 {
         return tracks.to_vec();
     }
+    let orig_sum_x: f64 = tracks.iter().map(|s| s.dx).sum();
+    let orig_sum_y: f64 = tracks.iter().map(|s| s.dy).sum();
     let half = w / 2;
     let mut out = Vec::with_capacity(tracks.len());
     for i in 0..tracks.len() {
@@ -212,6 +234,25 @@ pub fn apply_sliding_window_filter(tracks: &[TrackSegment], window_size: usize) 
             dx,
             dy,
         });
+    }
+
+    // Rebalance boundary truncation loss so total camera displacement (sum_dx, sum_dy) stays conserved.
+    let new_sum_x: f64 = out.iter().map(|s| s.dx).sum();
+    let new_sum_y: f64 = out.iter().map(|s| s.dy).sum();
+    let diff_x = orig_sum_x - new_sum_x;
+    let diff_y = orig_sum_y - new_sum_y;
+    let abs_x: f64 = out.iter().map(|s| s.dx.abs()).sum();
+    let abs_y: f64 = out.iter().map(|s| s.dy.abs()).sum();
+    let n_f = out.len() as f64;
+    for seg in &mut out {
+        if diff_x.abs() > 1e-12 {
+            let weight = if abs_x > 1e-12 { seg.dx.abs() / abs_x } else { 1.0 / n_f };
+            seg.dx += diff_x * weight;
+        }
+        if diff_y.abs() > 1e-12 {
+            let weight = if abs_y > 1e-12 { seg.dy.abs() / abs_y } else { 1.0 / n_f };
+            seg.dy += diff_y * weight;
+        }
     }
     out
 }
@@ -386,11 +427,27 @@ pub fn apply_rdp_geometric_simplify(
             dy,
         });
     }
-    if out.is_empty() {
-        tracks.to_vec()
-    } else {
-        out
+    out
+}
+
+fn split_contiguous_runs(tracks: Vec<TrackSegment>, max_gap_ms: f64) -> Vec<Vec<TrackSegment>> {
+    if tracks.is_empty() {
+        return Vec::new();
     }
+    let max_gap_ns = (max_gap_ms.max(0.0) * 1_000_000.0) as u64;
+    let mut runs = Vec::new();
+    let mut cur = vec![tracks[0].clone()];
+    for seg in tracks.into_iter().skip(1) {
+        let gap = seg.start_ns.saturating_sub(cur.last().unwrap().end_ns);
+        if gap > max_gap_ns {
+            runs.push(cur);
+            cur = vec![seg];
+        } else {
+            cur.push(seg);
+        }
+    }
+    runs.push(cur);
+    runs
 }
 
 pub fn merge_and_simplify_tracks(
@@ -400,7 +457,7 @@ pub fn merge_and_simplify_tracks(
 ) -> Result<Vec<TrackSegment>, String> {
     let tracks = normalize_track_segments(raw_tracks);
     let actions = normalize_action_stamps(raw_actions);
-    let action_ts: HashSet<u64> = actions.iter().map(|a| a.ts_ns).collect();
+    let sorted_action_ts: Vec<u64> = actions.iter().map(|a| a.ts_ns).collect();
     let split_tracks = split_tracks_with_action_embedding(&tracks, &actions, cfg);
     if split_tracks.is_empty() {
         return Ok(Vec::new());
@@ -416,33 +473,35 @@ pub fn merge_and_simplify_tracks(
     let chunks = if cfg.allow_cross_action_merge {
         vec![split_tracks]
     } else {
-        split_by_hard_boundaries(&split_tracks, &action_ts)
+        split_by_hard_boundaries(&split_tracks, &sorted_action_ts)
     };
 
     let mut result = Vec::new();
-    for mut cur in chunks {
-        for step in &cfg.pipeline {
-            match step.trim().to_ascii_lowercase().as_str() {
-                "" => continue,
-                "sliding" | "sliding_window" | "window" => {
-                    cur = apply_sliding_window_filter(&cur, cfg.sliding_window_size);
+    for chunk in chunks {
+        for mut cur in split_contiguous_runs(chunk, cfg.merge_gap_ms) {
+            for step in &cfg.pipeline {
+                match step.trim().to_ascii_lowercase().as_str() {
+                    "" => continue,
+                    "sliding" | "sliding_window" | "window" => {
+                        cur = apply_sliding_window_filter(&cur, cfg.sliding_window_size);
+                    }
+                    "intent" | "intent_preserve" | "intent-preserve" => {
+                        cur = apply_intent_preserve_simplify(
+                            &cur,
+                            cfg.intent_angle_threshold_deg,
+                            cfg.intent_speed_ratio_threshold,
+                            cfg.intent_min_dt_ms,
+                            cfg.merge_gap_ms,
+                        );
+                    }
+                    "rdp" => {
+                        cur = apply_rdp_geometric_simplify(&cur, cfg.rdp_epsilon);
+                    }
+                    other => return Err(format!("未知轨迹化简步骤：{other}")),
                 }
-                "intent" | "intent_preserve" | "intent-preserve" => {
-                    cur = apply_intent_preserve_simplify(
-                        &cur,
-                        cfg.intent_angle_threshold_deg,
-                        cfg.intent_speed_ratio_threshold,
-                        cfg.intent_min_dt_ms,
-                        cfg.merge_gap_ms,
-                    );
-                }
-                "rdp" => {
-                    cur = apply_rdp_geometric_simplify(&cur, cfg.rdp_epsilon);
-                }
-                other => return Err(format!("未知轨迹化简步骤：{other}")),
             }
+            result.extend(cur);
         }
-        result.extend(cur);
     }
 
     result.sort_by_key(|t| (t.start_ns, t.end_ns));
@@ -476,5 +535,77 @@ mod tests {
         let out = merge_and_simplify_tracks(&segs, &[], &cfg).unwrap();
         assert_eq!(out.len(), 1);
         assert!((out[0].dx - 100.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn sliding_window_filter_conserves_total_displacement() {
+        let segs = vec![
+            TrackSegment { start_ns: 0, end_ns: 1_000_000, dx: 100.0, dy: 2.0 },
+            TrackSegment { start_ns: 1_000_000, end_ns: 2_000_000, dx: 20.0, dy: -4.0 },
+            TrackSegment { start_ns: 2_000_000, end_ns: 3_000_000, dx: 5.0, dy: 10.0 },
+            TrackSegment { start_ns: 3_000_000, end_ns: 4_000_000, dx: 2.0, dy: 30.0 },
+        ];
+        let smoothed = apply_sliding_window_filter(&segs, 5);
+        let orig_x: f64 = segs.iter().map(|s| s.dx).sum();
+        let orig_y: f64 = segs.iter().map(|s| s.dy).sum();
+        let new_x: f64 = smoothed.iter().map(|s| s.dx).sum();
+        let new_y: f64 = smoothed.iter().map(|s| s.dy).sum();
+        assert!((orig_x - new_x).abs() < 1e-9);
+        assert!((orig_y - new_y).abs() < 1e-9);
+    }
+
+    #[test]
+    fn embedding_and_action_boundaries_conserve_displacement_and_respect_gaps() {
+        let cfg = TrackSimplifyConfig {
+            enabled: true,
+            pipeline: vec!["intent".to_string()],
+            merge_gap_ms: 25.0,
+            allow_cross_action_merge: false,
+            enable_action_delay_embedding: true,
+            action_embed_delay_ms: 10.0,
+            action_embed_max_ratio_to_next_press: 0.9,
+            ..Default::default()
+        };
+
+        // Hole near tail (at 98ms with 10ms hole) consumes tail; total displacement must be conserved.
+        let tail_tracks = vec![TrackSegment {
+            start_ns: 0,
+            end_ns: 100_000_000,
+            dx: 100.0,
+            dy: -40.0,
+        }];
+        let tail_actions = vec![ActionStamp {
+            ts_ns: 98_000_000,
+            cmd: "kd".to_string(),
+            key: "w".to_string(),
+        }];
+        let split = split_tracks_with_action_embedding(&tail_tracks, &tail_actions, &cfg);
+        let sum_dx: f64 = split.iter().map(|s| s.dx).sum();
+        let sum_dy: f64 = split.iter().map(|s| s.dy).sum();
+        assert!((sum_dx - 100.0).abs() < 1e-9);
+        assert!((sum_dy - (-40.0)).abs() < 1e-9);
+
+        // Action sitting strictly inside gap [10ms, 20ms] blocks merging when allow_cross_action_merge is false.
+        let gapped = vec![
+            TrackSegment {
+                start_ns: 0,
+                end_ns: 10_000_000,
+                dx: 15.0,
+                dy: 0.0,
+            },
+            TrackSegment {
+                start_ns: 20_000_000,
+                end_ns: 30_000_000,
+                dx: 15.0,
+                dy: 0.0,
+            },
+        ];
+        let gap_action = vec![ActionStamp {
+            ts_ns: 15_000_000,
+            cmd: "kd".to_string(),
+            key: "e".to_string(),
+        }];
+        let merged = merge_and_simplify_tracks(&gapped, &gap_action, &cfg).unwrap();
+        assert_eq!(merged.len(), 2);
     }
 }

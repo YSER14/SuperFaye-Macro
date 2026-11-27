@@ -14,7 +14,7 @@ if errorlevel 1 (
     exit /b 1
 )
 
-powershell.exe -NoProfile -NonInteractive -Command "$t = ((cargo metadata --no-deps --format-version 1) -join '' | ConvertFrom-Json).target_directory; $rel = Join-Path $t 'release'; Copy-Item (Join-Path $rel 'superfaye-macro.exe') '.\superfaye-macro.exe' -Force; if (Test-Path (Join-Path $rel 'WebView2Loader.dll')) { Copy-Item (Join-Path $rel 'WebView2Loader.dll') '.\WebView2Loader.dll' -Force }"
+powershell.exe -NoProfile -NonInteractive -Command "$ErrorActionPreference = 'Stop'; $t = ((cargo metadata --no-deps --format-version 1) -join '' | ConvertFrom-Json).target_directory; $rel = Join-Path $t 'release'; $exe = '.\superfaye-macro.exe'; Copy-Item -LiteralPath (Join-Path $rel 'superfaye-macro.exe') -Destination $exe -Force; $loader = Join-Path $rel 'WebView2Loader.dll'; $installed = Join-Path (Get-Location) 'WebView2Loader.dll'; if ((Test-Path -LiteralPath $loader) -and ((-not (Test-Path -LiteralPath $installed)) -or ([Convert]::ToBase64String([IO.File]::ReadAllBytes($loader)) -cne [Convert]::ToBase64String([IO.File]::ReadAllBytes($installed))))) { Copy-Item -LiteralPath $loader -Destination $installed -Force }; (Get-Item -LiteralPath $exe).LastWriteTimeUtc = [DateTime]::UtcNow"
 if errorlevel 1 (
     echo [错误] 复制产物失败。
     exit /b 1

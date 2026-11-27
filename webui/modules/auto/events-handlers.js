@@ -155,7 +155,7 @@
             var borderColor = colorMap[sound] || '#3b82f6';
 
             var popup = document.createElement('div');
-            popup.style.cssText = 'pointer-events:auto;min-width:260px;max-width:380px;background:var(--bg,#1e1e2e);border:1px solid ' + borderColor + ';border-radius:8px;padding:12px 16px;box-shadow:0 4px 20px rgba(0,0,0,.4);opacity:0;transform:translateY(10px);transition:all .3s ease;font-family:system-ui,sans-serif;';
+            popup.style.cssText = 'pointer-events:auto;min-width:260px;max-width:380px;background:var(--bg,#1e1e2e);border:1px solid ' + borderColor + ';border-radius:8px;padding:12px 16px;box-shadow:0 4px 20px rgba(0,0,0,.4);opacity:0;transform:translateY(10px);transition:all .3s ease;';
 
             popup.innerHTML = '<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">' +
                 '<div style="width:4px;height:16px;border-radius:2px;background:' + borderColor + ';flex-shrink:0"></div>' +

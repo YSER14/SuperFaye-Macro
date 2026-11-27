@@ -2436,6 +2436,49 @@ hr {
   overflow: hidden;
 }
 
+.appearance-settings {
+  display: grid;
+  grid-template-columns: minmax(145px, 1fr) minmax(0, 2fr);
+  align-items: center;
+  gap: 8px 16px;
+  flex-shrink: 0;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+}
+
+.appearance-settings label {
+  margin: 0;
+  color: var(--foreground);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.appearance-settings p {
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: 11px;
+}
+
+.appearance-font-controls {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr);
+  gap: 8px;
+}
+
+.appearance-font-preview {
+  grid-column: 1 / -1;
+  padding: 6px 9px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  color: var(--muted-foreground);
+  background: var(--secondary);
+  font-size: 14px;
+}
+
+@media (max-width: 880px) {
+  .appearance-settings { grid-template-columns: minmax(0, 1fr); }
+}
+
 .param-toolbar {
   display: flex;
   flex-wrap: wrap;

@@ -32,7 +32,7 @@ export const ACTION_FORM_UI = {
   mu: { arg1Label: '鼠标键', arg2Label: '延迟（ms）', arg1Placeholder: 'left（左键）、right（右键）、middle（中键）', arg2Placeholder: '50', showArg2: true },
   wait: { arg1Label: '等待（ms）', arg2Label: '', arg1Placeholder: '如 50', arg2Placeholder: '', showArg2: false },
   view: { arg1Label: '位移（dx,dy）', arg2Label: '时长（ms）', arg1Placeholder: '如 120,-35', arg2Placeholder: '50', showArg2: true },
-  loop: { arg1Label: '循环次数', arg2Label: '', arg1Placeholder: '大于等于 1', arg2Placeholder: '', showArg2: false },
+  loop: { arg1Label: '循环次数', arg2Label: '', arg1Placeholder: '0 表示跳过，默认 1', arg2Placeholder: '', showArg2: false },
   group: { arg1Label: '宏组名', arg2Label: '', arg1Placeholder: '如 开场、连段1', arg2Placeholder: '', showArg2: false },
   import: { arg1Label: '子宏路径', arg2Label: '', arg1Placeholder: '如 宏/录制宏/示例.json', arg2Placeholder: '', showArg2: false },
   note: { arg1Label: '注释内容', arg2Label: '', arg1Placeholder: '输入注释文本（无需输入 //）', arg2Placeholder: '', showArg2: false },

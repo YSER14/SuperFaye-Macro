@@ -1,6 +1,6 @@
 import { state } from '../core/state.js';
 import { q } from '../core/dom.js';
-import { parseNumber, isContainerAction, cloneAction } from './action-model.js';
+import { parseNumber, parseLoopCount, isContainerAction, cloneAction } from './action-model.js';
 import { ACTION_FORM_DEFAULTS, ACTION_FORM_UI } from '../core/constants.js';
 
 export function getDefaultForType(type) {
@@ -66,7 +66,7 @@ export function fillActionEditorByAction(action) {
   }
 
   if (type === 'loop') {
-    q('#actionArg1').value = String(Math.max(1, parseNumber(action[1], 1)));
+    q('#actionArg1').value = String(parseLoopCount(action[1]));
     q('#actionArg2').value = '';
     return;
   }
@@ -140,7 +140,7 @@ export function buildActionFromInputs(options = {}) {
   }
 
   if (type === 'loop') {
-    const count = Math.max(1, parseNumber(arg1 || '1', 1));
+    const count = parseLoopCount(arg1);
     return ['loop', count, containerBodyFor(existingAction)];
   }
 

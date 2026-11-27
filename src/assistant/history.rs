@@ -4,6 +4,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::{Value, json};
 
+use crate::assistant::attachments::{
+    ChatAttachment, estimate_attachment_tokens, summarize_attachments_for_history,
+};
 use crate::assistant::model::estimate_text_tokens;
 
 const SUMMARY_PREFIX: &str = "较早对话的续聊摘要，供参考：\n";
@@ -46,7 +49,8 @@ impl AssistantHistory {
                 id INTEGER PRIMARY KEY, chat TEXT NOT NULL REFERENCES chats(id),
                 prompt TEXT NOT NULL, model TEXT NOT NULL, reply TEXT,
                 phases TEXT NOT NULL DEFAULT '[]', seconds INTEGER,
-                effects TEXT NOT NULL DEFAULT '[]'
+                effects TEXT NOT NULL DEFAULT '[]',
+                attachments TEXT NOT NULL DEFAULT '[]'
             );
             CREATE INDEX IF NOT EXISTS turns_chat ON turns(chat, id);
             CREATE TABLE IF NOT EXISTS preferences (name TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -56,6 +60,24 @@ impl AssistantHistory {
             ",
         )
         .map_err(|e| e.to_string())?;
+        let has_attachments: bool = {
+            let mut stmt = db
+                .prepare("PRAGMA table_info(turns)")
+                .map_err(|e| e.to_string())?;
+            let cols: Vec<String> = stmt
+                .query_map([], |r| r.get::<_, String>(1))
+                .map_err(|e| e.to_string())?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| e.to_string())?;
+            cols.iter().any(|c| c == "attachments")
+        };
+        if !has_attachments {
+            db.execute(
+                "ALTER TABLE turns ADD COLUMN attachments TEXT NOT NULL DEFAULT '[]'",
+                [],
+            )
+            .map_err(|e| e.to_string())?;
+        }
         Ok(db)
     }
 
@@ -97,20 +119,45 @@ impl AssistantHistory {
         })
     }
 
-    fn turn_tokens(prompt: &str, reply: &str) -> usize {
-        estimate_text_tokens(prompt) + estimate_text_tokens(reply)
+    fn parse_attachments(raw: &str) -> Vec<ChatAttachment> {
+        if raw.trim().is_empty() || raw.trim() == "[]" {
+            return Vec::new();
+        }
+        serde_json::from_str(raw).unwrap_or_default()
     }
 
-    fn context_tokens(through: i64, summary: &str, turns: &[(i64, String, Option<String>)]) -> usize {
+    fn combine_prompt_and_attachments(prompt: &str, attachments_raw: &str) -> String {
+        let atts = Self::parse_attachments(attachments_raw);
+        let summary = summarize_attachments_for_history(&atts);
+        if summary.is_empty() {
+            prompt.to_string()
+        } else if prompt.trim().is_empty() {
+            summary
+        } else {
+            format!("{prompt}\n{summary}")
+        }
+    }
+
+    fn turn_tokens(prompt: &str, reply: &str, attachments_raw: &str) -> usize {
+        let atts = Self::parse_attachments(attachments_raw);
+        let att_tokens: usize = atts
+            .iter()
+            .map(|a| estimate_attachment_tokens(a, false))
+            .sum();
+        let prompt_cost = if prompt.is_empty() { 0 } else { estimate_text_tokens(prompt) };
+        prompt_cost + att_tokens + estimate_text_tokens(reply)
+    }
+
+    fn context_tokens(through: i64, summary: &str, turns: &[(i64, String, Option<String>, String)]) -> usize {
         let mut total = if summary.is_empty() {
             0
         } else {
             estimate_text_tokens(summary)
         };
-        for (id, prompt, reply_opt) in turns {
+        for (id, prompt, reply_opt, attachments) in turns {
             if *id > through {
                 if let Some(reply) = reply_opt {
-                    total += Self::turn_tokens(prompt, reply);
+                    total += Self::turn_tokens(prompt, reply, attachments);
                 }
             }
         }
@@ -165,7 +212,7 @@ impl AssistantHistory {
 
         let mut turn_stmt = db
             .prepare(
-                "SELECT id, prompt, model, reply, phases, seconds, effects FROM turns WHERE chat = ?1 ORDER BY id",
+                "SELECT id, prompt, model, reply, phases, seconds, effects, attachments FROM turns WHERE chat = ?1 ORDER BY id",
             )
             .map_err(|e| e.to_string())?;
         struct TurnRow {
@@ -176,6 +223,7 @@ impl AssistantHistory {
             phases: String,
             seconds: Option<i64>,
             effects: String,
+            attachments: String,
         }
         let rows: Vec<TurnRow> = turn_stmt
             .query_map(params![&chat], |r| {
@@ -187,6 +235,7 @@ impl AssistantHistory {
                     phases: r.get(4)?,
                     seconds: r.get(5)?,
                     effects: r.get(6)?,
+                    attachments: r.get(7)?,
                 })
             })
             .map_err(|e| e.to_string())?
@@ -194,9 +243,9 @@ impl AssistantHistory {
             .map_err(|e| e.to_string())?;
 
         let (through, summary) = Self::summary(&db, &chat)?;
-        let raw_tokens: Vec<(i64, String, Option<String>)> = rows
+        let raw_tokens: Vec<(i64, String, Option<String>, String)> = rows
             .iter()
-            .map(|r| (r.id, r.prompt.clone(), r.reply.clone()))
+            .map(|r| (r.id, r.prompt.clone(), r.reply.clone(), r.attachments.clone()))
             .collect();
         let context_tokens = Self::context_tokens(through, &summary, &raw_tokens);
 
@@ -205,6 +254,7 @@ impl AssistantHistory {
             .map(|r| {
                 let phases: Value = serde_json::from_str(&r.phases).unwrap_or_else(|_| json!([]));
                 let effects: Value = serde_json::from_str(&r.effects).unwrap_or_else(|_| json!([]));
+                let attachments: Value = serde_json::from_str(&r.attachments).unwrap_or_else(|_| json!([]));
                 json!({
                     "prompt": r.prompt,
                     "model": r.model,
@@ -212,6 +262,7 @@ impl AssistantHistory {
                     "phases": phases,
                     "seconds": r.seconds,
                     "effects": effects,
+                    "attachments": attachments,
                 })
             })
             .collect();
@@ -229,12 +280,25 @@ impl AssistantHistory {
         }))
     }
 
+    #[cfg(test)]
     pub fn begin(
         &self,
         mode: &str,
         chat_arg: &str,
         prompt: &str,
         model: &str,
+    ) -> Result<(String, i64), String> {
+        self.begin_with_attachments(mode, chat_arg, prompt, model, "[]", None)
+    }
+
+    pub fn begin_with_attachments(
+        &self,
+        mode: &str,
+        chat_arg: &str,
+        prompt: &str,
+        model: &str,
+        attachments_json: &str,
+        title_fallback: Option<&str>,
     ) -> Result<(String, i64), String> {
         let mut db = self.connect()?;
         let tx = db
@@ -258,7 +322,12 @@ impl AssistantHistory {
         } else {
             let new_id = format!("{:032x}", rand::random::<u128>());
             let collapsed = prompt.split_whitespace().collect::<Vec<_>>().join(" ");
-            let title: String = collapsed.chars().take(52).collect();
+            let title_src = if collapsed.is_empty() {
+                title_fallback.unwrap_or("多模态输入").to_string()
+            } else {
+                collapsed
+            };
+            let title: String = title_src.chars().take(52).collect();
             tx.execute(
                 "INSERT INTO chats VALUES (?1, ?2, ?3, ?4)",
                 params![&new_id, mode, title, updated],
@@ -267,8 +336,8 @@ impl AssistantHistory {
             new_id
         };
         tx.execute(
-            "INSERT INTO turns(chat, prompt, model) VALUES (?1, ?2, ?3)",
-            params![&chat, prompt, model],
+            "INSERT INTO turns(chat, prompt, model, attachments) VALUES (?1, ?2, ?3, ?4)",
+            params![&chat, prompt, model, attachments_json],
         )
         .map_err(|e| e.to_string())?;
         let turn_id = tx.last_insert_rowid();
@@ -311,19 +380,19 @@ impl AssistantHistory {
 
         let mut stmt = db
             .prepare(
-                "SELECT prompt, reply FROM turns WHERE chat = ?1 AND id > ?2 AND id < ?3
+                "SELECT prompt, reply, attachments FROM turns WHERE chat = ?1 AND id > ?2 AND id < ?3
                  AND reply IS NOT NULL ORDER BY id DESC",
             )
             .map_err(|e| e.to_string())?;
-        let rows: Vec<(String, String)> = stmt
-            .query_map(params![chat, through, before], |r| Ok((r.get(0)?, r.get(1)?)))
+        let rows: Vec<(String, String, String)> = stmt
+            .query_map(params![chat, through, before], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
             .map_err(|e| e.to_string())?
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| e.to_string())?;
 
         let mut messages = Vec::new();
-        for (prompt, reply) in rows {
-            budget -= Self::turn_tokens(&prompt, &reply) as isize;
+        for (prompt, reply, attachments) in rows {
+            budget -= Self::turn_tokens(&prompt, &reply, &attachments) as isize;
             if budget < 0 {
                 break;
             }
@@ -333,7 +402,7 @@ impl AssistantHistory {
             });
             messages.push(HistoryTurn {
                 role: "user".to_string(),
-                content: prompt,
+                content: Self::combine_prompt_and_attachments(&prompt, &attachments),
             });
         }
         messages.reverse();
@@ -369,19 +438,19 @@ impl AssistantHistory {
         let mut through = previous;
         let mut stmt = db
             .prepare(
-                "SELECT id, prompt, reply FROM turns WHERE chat = ?1 AND id > ?2 AND id < ?3
+                "SELECT id, prompt, reply, attachments FROM turns WHERE chat = ?1 AND id > ?2 AND id < ?3
                  AND reply IS NOT NULL ORDER BY id",
             )
             .map_err(|e| e.to_string())?;
-        let rows: Vec<(i64, String, String)> = stmt
+        let rows: Vec<(i64, String, String, String)> = stmt
             .query_map(params![chat, previous, before], |r| {
-                Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
             })
             .map_err(|e| e.to_string())?
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| e.to_string())?;
-        for (id, prompt, reply) in rows {
-            let cost = Self::turn_tokens(&prompt, &reply);
+        for (id, prompt, reply, attachments) in rows {
+            let cost = Self::turn_tokens(&prompt, &reply, &attachments);
             if used + cost > budget {
                 break;
             }
@@ -389,7 +458,7 @@ impl AssistantHistory {
             through = id;
             messages.push(HistoryTurn {
                 role: "user".to_string(),
-                content: prompt,
+                content: Self::combine_prompt_and_attachments(&prompt, &attachments),
             });
             messages.push(HistoryTurn {
                 role: "assistant".to_string(),
@@ -425,11 +494,11 @@ impl AssistantHistory {
         )
         .map_err(|e| e.to_string())?;
         let (_, stored) = Self::summary(&tx, chat)?;
-        let turns: Vec<(i64, String, Option<String>)> = {
+        let turns: Vec<(i64, String, Option<String>, String)> = {
             let mut stmt = tx
-                .prepare("SELECT id, prompt, reply FROM turns WHERE chat = ?1 AND id > ?2")
+                .prepare("SELECT id, prompt, reply, attachments FROM turns WHERE chat = ?1 AND id > ?2")
                 .map_err(|e| e.to_string())?;
-            stmt.query_map(params![chat, through], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            stmt.query_map(params![chat, through], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
                 .map_err(|e| e.to_string())?
                 .collect::<Result<Vec<_>, _>>()
                 .map_err(|e| e.to_string())?

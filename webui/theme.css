@@ -7,8 +7,9 @@
    ═══════════════════════════════════════════════════════════════════════ */
 
 :root {
-  --font-sans: "Segoe UI Variable Text", "Segoe UI", "PingFang SC",
+  --font-sans-default: "Segoe UI Variable Text", "Segoe UI", "PingFang SC",
     "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans SC", system-ui, sans-serif;
+  --font-sans: var(--font-sans-default);
   --font-mono: "JetBrains Mono", "Cascadia Mono", "Cascadia Code", Consolas,
     "Noto Sans Mono", ui-monospace, monospace;
 

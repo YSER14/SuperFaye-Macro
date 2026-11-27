@@ -1,5 +1,19 @@
 import { apiCall } from './core/api.js';
 import { renderRichReply } from './assistant-markdown.js';
+import {
+  createVoiceRecorder,
+  estimateAttachmentTokens,
+  extractVideoKeyframes,
+  formatDuration,
+  iconMarkup,
+  openAttachmentLightbox,
+  openPickerModal,
+  openRegionCropper,
+  openUrlInputModal,
+  readFileAsDataUrl,
+  renderComposerAttachments,
+  renderMessageAttachments,
+} from './assistant-multimodal.js';
 
 const PHASES = {
   preparing: '整理本轮需求',
@@ -7,6 +21,10 @@ const PHASES = {
   compacting: '正在压缩对话上下文',
   reasoning: '模型正在思考',
   reading_context: '读取编辑器快照',
+  listing_archive: '查看 ZIP 内容',
+  extracting_archive: '解压 ZIP',
+  recognizing_text: '本地识别图片文字',
+  inspecting_images: '使用模型识别图片',
   looking_up_nodes: '查找原生节点定义',
   building_workflow: '搭建流程并连接节点',
   writing: '整理草稿',
@@ -16,8 +34,8 @@ const PHASES = {
 const EFFORT = { minimal: '最低', low: '低', medium: '中', high: '高', xhigh: '很高', max: '最高' };
 const PERMISSIONS = {
   ask: '联网、外部文件操作和高风险写入时审批',
-  auto: '自动批准常规操作，外部文件、覆盖、脚本写入和有风险的联网请求仍需审批',
-  full: '文件与公开网页工具直接执行，使用当前 Windows 用户的文件权限',
+  auto: '自动批准常规操作，外部文件、覆盖、脚本写入、发送图片和有风险的网页访问仍需审批',
+  full: '直接执行文件、网页和模型识图工具，文件权限与当前 Windows 用户相同',
 };
 const keyOf = (snapshot) => JSON.stringify(snapshot);
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -55,6 +73,12 @@ export function mountAssistant(button, editor) {
   panel.hidden = true;
   panel.setAttribute('aria-labelledby', 'ai-model-title');
   panel.innerHTML = `
+    <div class="ai-drop-overlay" data-ai="drop-overlay" hidden>
+      <div class="ai-drop-card">
+        <strong>松开以添加多模态输入</strong>
+        <span>支持图片、截图、视频、音频、ZIP 压缩包、文档、宏文件</span>
+      </div>
+    </div>
     <header class="ai-header">
       <div class="ai-heading"><h2 id="ai-model-title" data-ai="model-title">模型</h2></div>
       <div class="ai-header-actions">
@@ -86,6 +110,7 @@ export function mountAssistant(button, editor) {
         <h3 data-ai="empty-title"></h3>
         <p class="ai-empty-description" data-ai="empty-description" hidden></p>
         <div class="ai-examples" data-ai="examples"></div>
+        <p class="ai-muted ai-empty-multimodal">支持 Ctrl+V 粘贴截图、拖入图片/ZIP/文件、屏幕框选、语音录音、视频抽帧与引用宏</p>
       </div>
       <div class="ai-history" data-ai="history" role="log" aria-label="对话消息"></div>
       <details class="ai-review" data-ai="review" hidden>
@@ -119,8 +144,21 @@ export function mountAssistant(button, editor) {
         <button type="button" class="ai-quiet" data-ai="undo" hidden>撤销 AI 修改</button>
       </div>
       <div class="ai-inputbox">
+        <div class="ai-attachments" data-ai="attachments" hidden></div>
+        <div class="ai-recording-bar" data-ai="recording-bar" hidden>
+          <span class="ai-rec-dot" aria-hidden="true"></span>
+          <span class="ai-rec-label">正在录音</span>
+          <time class="ai-rec-time" data-ai="rec-time">00:00</time>
+          <span class="ai-rec-transcript" data-ai="rec-transcript"></span>
+          <button type="button" class="ai-quiet" data-ai="rec-cancel">取消</button>
+          <button type="button" class="ai-primary" data-ai="rec-stop">完成</button>
+        </div>
         <textarea data-ai="prompt" rows="2" aria-label="给 AI 的需求"></textarea>
+        <input type="file" data-ai="video-input" accept="video/*" hidden>
         <div class="ai-compose-actions">
+          <button type="button" class="ai-quiet ai-icon ai-attach-btn" data-ai="attach-toggle" aria-label="添加多模态输入" title="添加图片、截图、视频、音频、文件或宏引用" aria-expanded="false" aria-controls="ai-attach-menu">${iconMarkup('plus', 15)}</button>
+          <div class="ai-popover ai-attach-menu" id="ai-attach-menu" data-ai="attach-menu" aria-label="多模态输入" role="group" hidden></div>
+          <button type="button" class="ai-quiet ai-icon ai-mic-btn" data-ai="mic-toggle" aria-label="语音输入" title="点击开始录音（再次点击完成）">${iconMarkup('mic', 15)}</button>
           <button type="button" class="ai-quiet ai-icon ai-slash" data-ai="commands-toggle" aria-label="助手命令" title="助手命令 (/)" aria-expanded="false" aria-controls="ai-commands">/</button>
           <div class="ai-popover ai-commands" id="ai-commands" data-ai="commands" aria-label="助手命令" role="group" hidden></div>
           <select class="ai-model" data-ai="model" aria-label="模型"></select>
@@ -172,6 +210,13 @@ export function mountAssistant(button, editor) {
   const reasoning = control('reasoning');
   const reasoningToggle = control('reasoning-toggle');
   const commandsMenu = control('commands');
+  const attachMenu = control('attach-menu');
+  const attachToggle = control('attach-toggle');
+  const micToggle = control('mic-toggle');
+  const attachmentsTray = control('attachments');
+  const recordingBar = control('recording-bar');
+  const dropOverlay = control('drop-overlay');
+  const videoInput = control('video-input');
   const contextToggle = control('context-toggle');
   const contextMenu = control('context');
   let chat = '';
@@ -179,6 +224,12 @@ export function mountAssistant(button, editor) {
   let lastUsage = null;
   let selectedCommand = -1;
   let archive = [];
+  let attachments = [];
+  let recorder = null;
+  let recordingBusy = false;
+  let captureCancel = null;
+  const mediaUrlCache = new Map();
+  let dragDepth = 0;
   let chatsLoaded = false;
   let chatsBusy = false;
   let permissionBusy = false;
@@ -197,6 +248,9 @@ export function mountAssistant(button, editor) {
   const commands = [
     ['new', '新建对话', () => loadChats('')],
     ['history', '打开历史对话', () => { showChats(true); loadChats(); }],
+    ['capture', '屏幕框选截图', () => runAttachAction('capture-region')],
+    ['file', '添加文件或图片', () => runAttachAction('any')],
+    ['voice', '语音录音输入', () => toggleVoiceRecording()],
     ['model', '切换模型', () => {
       modelSelect.focus();
       try { modelSelect.showPicker?.(); } catch { /* 保留对下拉框的焦点 */ }
@@ -248,6 +302,7 @@ export function mountAssistant(button, editor) {
     commandsMenu.hidden = !matches.length;
     toggle.setAttribute('aria-expanded', String(Boolean(matches.length)));
     if (!matches.length) return;
+    showAttachMenu(false);
     showContext(false);
     showReasoning(false);
     showSettings(false);
@@ -270,13 +325,428 @@ export function mountAssistant(button, editor) {
     }
   }
 
+  async function fetchAttachmentMediaUrl(path) {
+    if (!path) return '';
+    if (mediaUrlCache.has(path)) return mediaUrlCache.get(path);
+    const { data } = await apiCall('assistant_read_attachment', path);
+    if (data?.url) {
+      mediaUrlCache.set(path, data.url);
+      return data.url;
+    }
+    return '';
+  }
+
+  function renderAttachments() {
+    const capability = catalog[modelSelect.value] || {};
+    renderComposerAttachments(attachmentsTray, attachments, {
+      capability,
+      onRemove: (id) => {
+        attachments = attachments.filter((item) => item.id !== id);
+        renderAttachments();
+        renderContext();
+      },
+      onToggleMode: (att) => {
+        att.mode = att.mode === 'ocr' ? 'auto' : 'ocr';
+        renderAttachments();
+        renderContext();
+      },
+      onPreview: (att) => {
+        openAttachmentLightbox(att, {
+          fetchMedia: fetchAttachmentMediaUrl,
+          editable: true,
+          onToggleMode: (target) => {
+            target.mode = target.mode === 'ocr' ? 'auto' : 'ocr';
+            renderAttachments();
+            renderContext();
+          },
+        });
+      },
+    });
+  }
+
+  function pushAttachments(items) {
+    if (!Array.isArray(items) || !items.length) return;
+    const room = Math.max(0, 16 - attachments.length);
+    if (!room) {
+      setStatus('单次对话最多附带 16 个多模态内容', true);
+      return;
+    }
+    const added = items.slice(0, room);
+    attachments.push(...added);
+    if (items.length > room) setStatus('已达到单次最多 16 个附件上限', true);
+    renderAttachments();
+    renderContext();
+  }
+
+  async function stageItem(payload) {
+    const { data } = await apiCall('assistant_stage_attachment', payload);
+    if (data?.attachment) pushAttachments([data.attachment]);
+    return data?.attachment;
+  }
+
+  async function hydrateVideoIfNeeded(att) {
+    if (att.kind !== 'video' || (att.frames && att.frames.length)) return att;
+    const prefix = 'appdata/assistant-attachments/';
+    if (!att.path || !att.path.startsWith(prefix)) return att;
+    const mediaUrl = '/__attachments/' + att.path.slice(prefix.length).split('/').map(encodeURIComponent).join('/');
+    try {
+      setStatus(`正在提取视频关键帧：${att.name}…`);
+      const extracted = await extractVideoKeyframes(mediaUrl);
+      const { data } = await apiCall('assistant_stage_attachment', {
+        kind: 'video',
+        name: att.name,
+        mime: att.mime,
+        size: att.size,
+        ...extracted,
+      });
+      setStatus('');
+      return data?.attachment || att;
+    } catch {
+      setStatus('');
+      return att;
+    }
+  }
+
+  async function handleFileObjects(fileList) {
+    if (!fileList?.length || active) return;
+    const files = [...fileList];
+    const added = [];
+    for (const file of files) {
+      if (attachments.length + added.length >= 16) {
+        setStatus('单次对话最多附带 16 个多模态内容', true);
+        break;
+      }
+      const ext = (file.name.split('.').pop() || '').toLowerCase();
+      const isVideo = file.type.startsWith('video/') || ['mp4', 'mov', 'webm', 'mkv', 'avi', 'm4v'].includes(ext);
+      if (isVideo) {
+        try {
+          setStatus(`正在提取视频关键帧：${file.name}…`);
+          const extracted = await extractVideoKeyframes(file);
+          const { data } = await apiCall('assistant_stage_attachment', {
+            kind: 'video',
+            name: file.name,
+            mime: file.type || 'video/mp4',
+            size: file.size || 0,
+            ...extracted,
+          });
+          if (data?.attachment) added.push(data.attachment);
+          setStatus('');
+          continue;
+        } catch (err) {
+          if (file.size > 32 * 1024 * 1024) {
+            setStatus(`视频 ${file.name} 无法抽帧且超过 32 MB，已跳过`, true);
+            continue;
+          }
+          setStatus(`视频抽帧失败（${err.message}），改为普通文件附带`);
+        }
+      }
+      if (file.size > 32 * 1024 * 1024) {
+        setStatus(`${file.name} 超过 32 MB，请用「文件 / ZIP」选择器添加`, true);
+        continue;
+      }
+      try {
+        const dataBase64 = await readFileAsDataUrl(file);
+        const { data } = await apiCall('assistant_stage_attachment', {
+          kind: 'auto',
+          name: file.name || 'clipboard.png',
+          mime: file.type || '',
+          data_base64: dataBase64,
+        });
+        if (data?.attachment) added.push(data.attachment);
+      } catch (err) {
+        setStatus(err.message || `添加 ${file.name} 失败`, true);
+      }
+    }
+    pushAttachments(added);
+  }
+
+  async function pollCoordinateClick() {
+    let aborted = false;
+    captureCancel = () => { aborted = true; };
+    await apiCall('pick_coordinate', 'screen');
+    while (!aborted) {
+      await wait(200);
+      if (aborted) return null;
+      const { data } = await apiCall('get_pick_result');
+      if (data && data.status !== 'picking') {
+        captureCancel = null;
+        if (data.phys_x === undefined) throw new Error('坐标拾取已取消或超时');
+        return data;
+      }
+    }
+    return null;
+  }
+
+  async function captureAndCrop(fetchCapture) {
+    try {
+      const capResp = await fetchCapture();
+      const cap = capResp?.data;
+      if (!cap?.image) throw new Error('未能捕获画面');
+      const cropped = await openRegionCropper(cap);
+      if (!cropped) return;
+      await stageItem(cropped);
+      setStatus('');
+    } catch (err) {
+      setStatus(err.message || '截图失败', true);
+    }
+  }
+
+  async function runAttachAction(action) {
+    if (active || chatsBusy || settingsBusy) return;
+    showAttachMenu(false);
+    try {
+      if (['image', 'audio', 'file', 'any'].includes(action)) {
+        const { data } = await apiCall('assistant_pick_files', action);
+        if (data?.canceled) return;
+        const resolved = [];
+        for (const att of data?.attachments || []) {
+          resolved.push(await hydrateVideoIfNeeded(att));
+        }
+        pushAttachments(resolved);
+        if (data?.errors?.length) setStatus(data.errors.join('；'), true);
+      } else if (action === 'video') {
+        videoInput.value = '';
+        videoInput.click();
+      } else if (action === 'capture-region') {
+        setStatus('请切换到目标画面后点击左键开始框选截图（按 Esc 放弃）…');
+        const pt = await pollCoordinateClick();
+        if (!pt) return;
+        await captureAndCrop(() => apiCall('capture_monitor_at_mouse'));
+      } else if (action === 'capture-delayed') {
+        let cancelled = false;
+        captureCancel = () => { cancelled = true; };
+        for (let s = 3; s >= 1; s -= 1) {
+          if (cancelled) return;
+          setStatus(`${s} 秒后截取鼠标所在屏幕，请切换到目标窗口…`);
+          await wait(1000);
+        }
+        captureCancel = null;
+        if (cancelled) return;
+        await captureAndCrop(() => apiCall('capture_monitor_at_mouse'));
+      } else if (action === 'capture-window') {
+        const { data: windows } = await apiCall('get_window_list');
+        const items = (windows || [])
+          .filter((w) => w.title && w.rect?.[2] >= 40 && w.rect?.[3] >= 40)
+          .map((w) => ({
+            icon: 'window',
+            label: w.title,
+            detail: `${w.class_name || '窗口'} · ${w.rect[2]}×${w.rect[3]}`,
+            value: w,
+          }));
+        const picked = await openPickerModal({
+          title: '选择要截图的窗口',
+          placeholder: '搜索窗口标题…',
+          items,
+          emptyText: '没有找到可截取的可见窗口',
+        });
+        if (!picked) return;
+        await captureAndCrop(() => apiCall('capture_window', picked.value.hwnd));
+      } else if (action === 'pick-coord') {
+        setStatus('请点击目标屏幕位置以拾取坐标…');
+        const pt = await pollCoordinateClick();
+        if (!pt) return;
+        await stageItem({ kind: 'coord', x: pt.phys_x, y: pt.phys_y });
+        setStatus('');
+      } else if (action === 'macro') {
+        const res = await apiCall('list_macros', '');
+        const items = (res.items || []).map((m) => ({
+          icon: 'macro',
+          label: m.name,
+          detail: m.path,
+          value: m,
+        }));
+        const picked = await openPickerModal({
+          title: '引用宏文件',
+          placeholder: '搜索宏文件名或路径…',
+          items,
+          emptyText: '宏目录内暂无宏文件',
+        });
+        if (!picked) return;
+        await stageItem({ kind: 'macro', path: picked.value.path });
+      } else if (action === 'macro_group') {
+        const res = await apiCall('load_group_lib');
+        const groups = res.lib?.groups || [];
+        const items = groups.map((g) => ({
+          icon: 'macro_group',
+          label: g.name,
+          detail: g.folder || '默认分组',
+          badge: `${(g.rows || []).length} 步`,
+          value: g,
+        }));
+        const picked = await openPickerModal({
+          title: '引用我的宏组',
+          placeholder: '搜索宏组名称…',
+          items,
+          emptyText: '宏组库里还没有已保存的宏组',
+        });
+        if (!picked) return;
+        await stageItem({ kind: 'macro_group', name: picked.value.name });
+      } else if (action === 'auto_script') {
+        const { data: scripts } = await apiCall('list_auto_scripts');
+        const items = (scripts || []).map((s) => ({
+          icon: 'auto_script',
+          label: s.name,
+          detail: s.path,
+          value: s,
+        }));
+        const picked = await openPickerModal({
+          title: '引用自动化脚本',
+          placeholder: '搜索 .auto.json 脚本…',
+          items,
+          emptyText: '自动化脚本目录内暂无脚本',
+        });
+        if (!picked) return;
+        await stageItem({ kind: 'auto_script', path: picked.value.path });
+      } else if (action === 'template') {
+        const { data: templates } = await apiCall('list_templates');
+        const items = (templates || []).map((t) => ({
+          icon: 'template',
+          label: t.name,
+          detail: t.path,
+          value: t,
+        }));
+        const picked = await openPickerModal({
+          title: '引用图片模板',
+          placeholder: '搜索模板文件名…',
+          items,
+          emptyText: '图片模板目录内暂无图片',
+        });
+        if (!picked) return;
+        await stageItem({ kind: 'template', path: picked.value.path });
+      } else if (action === 'url') {
+        const val = await openUrlInputModal();
+        if (!val) return;
+        await stageItem({ kind: 'url', url: val.url, name: val.name });
+      }
+    } catch (err) {
+      captureCancel = null;
+      setStatus(err.message || '添加输入失败', true);
+    }
+  }
+
+  function showAttachMenu(open) {
+    attachMenu.hidden = !open;
+    attachToggle.setAttribute('aria-expanded', String(open));
+    if (!open) return;
+    showCommands(false);
+    showContext(false);
+    showReasoning(false);
+    showSettings(false);
+    showChats(false);
+    attachMenu.replaceChildren();
+
+    const groups = [
+      ['媒体与截图', [
+        ['image', 'image', '选择图片', '多选 / 支持 Ctrl+V 贴图'],
+        ['scissors', 'capture-region', '屏幕框选截图', '点击目标屏拖动裁剪'],
+        ['timer', 'capture-delayed', '延迟 3 秒截屏', '切到游戏后自动截屏'],
+        ['window', 'capture-window', '窗口截图', '截取指定可见窗口'],
+        ['video', 'video', '选择视频', '自动抽取关键帧分析'],
+        ['audio', 'audio', '音频文件', 'WAV / MP3 / OGG / FLAC'],
+      ]],
+      ['文件与工作区引用', [
+        ['file', 'file', '文件 / ZIP', '文档、代码、Office 或压缩包'],
+        ['macro', 'macro', '引用宏文件', '从宏文件库选择'],
+        ['macro_group', 'macro_group', '引用宏组', '从我的宏组选择'],
+        ['auto_script', 'auto_script', '自动化脚本', '引用 .auto.json 流程'],
+        ['template', 'template', '图片模板', '引用模板图并供识图'],
+        ['coord', 'pick-coord', '拾取坐标', '获取屏幕 X/Y 坐标'],
+        ['url', 'url', '网页链接', '附带参考网址'],
+      ]],
+    ];
+
+    for (const [heading, items] of groups) {
+      append(attachMenu, 'div', heading, 'ai-attach-group-title');
+      const grid = append(attachMenu, 'div', '', 'ai-attach-grid');
+      for (const [iconName, action, title, hint] of items) {
+        const btn = append(grid, 'button', '', 'ai-attach-option ai-quiet');
+        btn.type = 'button';
+        btn.title = hint;
+        btn.insertAdjacentHTML('beforeend', iconMarkup(iconName, 14));
+        const textWrap = append(btn, 'span', '', 'ai-attach-option-text');
+        append(textWrap, 'strong', title);
+        append(textWrap, 'small', hint);
+        btn.addEventListener('click', () => runAttachAction(action));
+      }
+    }
+  }
+
+  async function toggleVoiceRecording() {
+    if (active || chatsBusy || settingsBusy) return;
+    if (recordingBusy && recorder) {
+      await recorder.stop();
+      return;
+    }
+    const recTime = control('rec-time');
+    const recTranscript = control('rec-transcript');
+    recTime.textContent = '00:00';
+    recTranscript.textContent = '';
+
+    recorder = createVoiceRecorder({
+      onTick: (ms) => {
+        recTime.textContent = formatDuration(ms);
+      },
+      onTranscript: (text) => {
+        recTranscript.textContent = text ? `「${text}」` : '';
+      },
+      onFinish: async (result) => {
+        recordingBusy = false;
+        recorder = null;
+        recordingBar.hidden = true;
+        micToggle.classList.remove('ai-recording');
+        setBusy();
+        try {
+          const att = await stageItem({
+            kind: 'audio',
+            name: `语音_${formatDuration(result.duration_ms).replace(':', '-')}.wav`,
+            mime: 'audio/wav',
+            data_base64: result.data_base64,
+            duration_ms: result.duration_ms,
+            transcript: result.transcript || '',
+          });
+          if (att && result.blob) att.local_url = URL.createObjectURL(result.blob);
+          setStatus(result.transcript ? '已添加语音输入（含识别文字）' : '已添加语音输入');
+        } catch (err) {
+          setStatus(err.message || '保存语音失败', true);
+        }
+      },
+      onError: (err) => {
+        recordingBusy = false;
+        recorder = null;
+        recordingBar.hidden = true;
+        micToggle.classList.remove('ai-recording');
+        setBusy();
+        setStatus(err.message || '录音失败', true);
+      },
+    });
+
+    try {
+      await recorder.start();
+      recordingBusy = true;
+      recordingBar.hidden = false;
+      micToggle.classList.add('ai-recording');
+      showAttachMenu(false);
+      setStatus('');
+      setBusy();
+    } catch (err) {
+      recorder = null;
+      recordingBusy = false;
+      recordingBar.hidden = true;
+      micToggle.classList.remove('ai-recording');
+      setStatus(err.message || '无法启动麦克风录音', true);
+    }
+  }
+
   function renderContext() {
-    const windowTokens = catalog[modelSelect.value]?.context_window;
+    const cap = catalog[modelSelect.value] || {};
+    const windowTokens = cap.context_window;
     const draftText = commandQuery() === undefined ? prompt.value.trim() : '';
+    const imageCapable = cap.image_input !== false;
+    const attachTokens = attachments.reduce((sum, att) => sum + estimateAttachmentTokens(att, imageCapable), 0);
     const previous = lastUsage?.model === modelSelect.value && lastUsage?.chat === chat ? lastUsage : null;
-    const actual = active ? active.usage : !draftText && previous;
+    const actual = active ? active.usage : !draftText && !attachTokens && previous;
     const estimate = (active?.estimatedTokens ?? historyTokens) +
-      (!active ? estimateTokens(draftText ? JSON.stringify(draftText) : '') : 0);
+      (!active ? estimateTokens(draftText ? JSON.stringify(draftText) : '') + attachTokens : 0);
     const used = actual ? actual.input_tokens + actual.output_tokens : estimate;
     const ratio = windowTokens > 0 ? used / windowTokens : null;
     const rating = ratio === null ? '—' : ratio > 0 && ratio < .001 ? '<0.1%' : percent.format(ratio);
@@ -286,9 +756,12 @@ export function mountAssistant(button, editor) {
     control('context-percent').textContent = rating;
     control('context-tokens').textContent = `${tokenCount.format(used)} / ${windowTokens ? tokenCount.format(windowTokens) : '—'} tokens`;
     const assumed = windowTokens && catalog[modelSelect.value]?.context_window_assumed;
+    const modLabels = { text: '文本', image: '图片', audio: '音频', video: '视频', file: '文件' };
+    const mods = (cap.input_modalities || []).map((m) => modLabels[m] || m).join(' · ');
     control('context-source').textContent = (actual ? (active ? '模型返回的本轮最近一次用量' : '模型返回的上次请求用量')
       : '预估对话与待发送文本') +
-      (assumed ? ' · 窗口为默认估算值' : !windowTokens ? ' · 等待模型窗口数据' : '');
+      (assumed ? ' · 窗口为默认估算值' : !windowTokens ? ' · 等待模型窗口数据' : '') +
+      (mods ? `\n输入支持：${mods}` : '');
     const detail = control('context-last');
     detail.hidden = Boolean(active) || !previous;
     if (previous && !active) {
@@ -303,6 +776,7 @@ export function mountAssistant(button, editor) {
     contextMenu.hidden = !open;
     contextToggle.setAttribute('aria-expanded', String(open));
     if (open) {
+      showAttachMenu(false);
       showCommands(false);
       showReasoning(false);
       showSettings(false);
@@ -369,7 +843,9 @@ export function mountAssistant(button, editor) {
     const pending = Boolean(active);
     control('send').hidden = pending;
     control('stop').hidden = !pending;
-    control('send').disabled = settingsBusy || chatsBusy || permissionBusy;
+    control('send').disabled = settingsBusy || chatsBusy || permissionBusy || recordingBusy;
+    attachToggle.disabled = pending || settingsBusy || chatsBusy || recordingBusy;
+    micToggle.disabled = pending || settingsBusy || chatsBusy;
     control('reset').disabled = pending || chatsBusy;
     control('chats-toggle').disabled = pending || chatsBusy;
     control('apply').disabled = pending || !draft?.changed;
@@ -381,6 +857,7 @@ export function mountAssistant(button, editor) {
     for (const setting of control('config-form').querySelectorAll('button')) setting.disabled = pending || settingsBusy;
     for (const example of control('examples').querySelectorAll('button')) example.disabled = pending;
     renderReasoning();
+    renderAttachments();
     renderContext();
     if (!commandsMenu.hidden) showCommands(true);
   }
@@ -389,6 +866,7 @@ export function mountAssistant(button, editor) {
     settings.hidden = !open;
     control('settings-toggle').setAttribute('aria-expanded', String(open));
     if (open) {
+      showAttachMenu(false);
       showCommands(false);
       showContext(false);
       showReasoning(false);
@@ -400,6 +878,7 @@ export function mountAssistant(button, editor) {
     reasoning.hidden = !open;
     reasoningToggle.setAttribute('aria-expanded', String(open));
     if (open) {
+      showAttachMenu(false);
       showCommands(false);
       showContext(false);
       showSettings(false);
@@ -411,6 +890,7 @@ export function mountAssistant(button, editor) {
     chats.hidden = !open;
     control('chats-toggle').setAttribute('aria-expanded', String(open));
     if (open) {
+      showAttachMenu(false);
       showCommands(false);
       showContext(false);
       showSettings(false);
@@ -448,7 +928,7 @@ export function mountAssistant(button, editor) {
         historyTokens = data.context_tokens || 0;
         lastUsage = null;
         for (const turn of data.turns || []) {
-          const user = addMessage('user', turn.prompt);
+          const user = addMessage('user', turn.prompt, '', turn.attachments || []);
           if (turn.reply) {
             const message = addMessage('assistant', turn.reply, turn.model);
             showTrace(message, turn.phases || [], turn.seconds);
@@ -479,7 +959,7 @@ export function mountAssistant(button, editor) {
     control('endpoint').value = data.endpoint || '';
     control('key').value = '';
     control('clear-key').checked = false;
-    const labels = { workbuddy: '已使用本机配置密钥', local_config: '已使用本机配置密钥', environment: '已使用启动环境密钥', session: '已使用本次会话密钥' };
+    const labels = { environment: '已使用启动环境密钥', session: '已使用本次会话密钥' };
     control('key-status').textContent = labels[data.key_source] || '界面输入的密钥仅保留到软件退出。';
   }
 
@@ -545,6 +1025,7 @@ export function mountAssistant(button, editor) {
     if (editor.defaultOpen) button.setAttribute('aria-pressed', String(open));
     if (editor.onVisibility) requestAnimationFrame(() => editor.onVisibility(open));
     if (!open) {
+      showAttachMenu(false);
       showCommands(false);
       showContext(false);
       showReasoning(false);
@@ -564,11 +1045,75 @@ export function mountAssistant(button, editor) {
   control('settings-toggle').addEventListener('click', () => showSettings(settings.hidden));
   contextToggle.addEventListener('click', () => showContext(contextMenu.hidden));
   control('commands-toggle').addEventListener('click', () => showCommands(commandsMenu.hidden, ''));
+  attachToggle.addEventListener('click', () => showAttachMenu(attachMenu.hidden));
+  micToggle.addEventListener('click', () => toggleVoiceRecording());
+  control('rec-stop').addEventListener('click', () => recorder?.stop());
+  control('rec-cancel').addEventListener('click', () => {
+    recorder?.cancel();
+    recorder = null;
+    recordingBusy = false;
+    recordingBar.hidden = true;
+    micToggle.classList.remove('ai-recording');
+    setBusy();
+  });
+  videoInput.addEventListener('change', () => {
+    if (videoInput.files?.length) handleFileObjects(videoInput.files);
+    videoInput.value = '';
+  });
+  prompt.addEventListener('paste', (event) => {
+    const dt = event.clipboardData;
+    if (!dt) return;
+    const files = [];
+    if (dt.files?.length) {
+      files.push(...dt.files);
+    } else if (dt.items?.length) {
+      for (const item of dt.items) {
+        if (item.kind === 'file') {
+          const file = item.getAsFile();
+          if (file) files.push(file);
+        }
+      }
+    }
+    if (!files.length) return;
+    if (!dt.getData('text/plain')) event.preventDefault();
+    handleFileObjects(files);
+  });
+  panel.addEventListener('dragenter', (event) => {
+    if (active) return;
+    event.preventDefault();
+    dragDepth += 1;
+    dropOverlay.hidden = false;
+  });
+  panel.addEventListener('dragover', (event) => {
+    if (active) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = 'copy';
+  });
+  panel.addEventListener('dragleave', () => {
+    dragDepth = Math.max(0, dragDepth - 1);
+    if (!dragDepth) dropOverlay.hidden = true;
+  });
+  panel.addEventListener('drop', (event) => {
+    event.preventDefault();
+    dragDepth = 0;
+    dropOverlay.hidden = true;
+    if (active) return;
+    const dt = event.dataTransfer;
+    if (!dt) return;
+    const macroPath = dt.getData('text/macro-path');
+    if (macroPath && macroPath.toLowerCase().endsWith('.json')) {
+      stageItem({ kind: 'macro', path: macroPath }).catch((err) => setStatus(err.message, true));
+      return;
+    }
+    if (dt.files?.length) handleFileObjects(dt.files);
+  });
   prompt.addEventListener('input', (event) => {
     if (!event.isComposing) showCommands(commandQuery() !== undefined);
     renderContext();
   });
   document.addEventListener('pointerdown', (event) => {
+    if (!attachMenu.hidden && !attachMenu.contains(event.target) &&
+        !attachToggle.contains(event.target)) showAttachMenu(false);
     if (!commandsMenu.hidden && !commandsMenu.contains(event.target) &&
         event.target !== prompt && event.target !== control('commands-toggle')) showCommands(false);
     if (!contextMenu.hidden && !control('context-toggle').parentElement.contains(event.target)) showContext(false);
@@ -654,7 +1199,14 @@ export function mountAssistant(button, editor) {
     }
     if (event.key === 'Escape') {
       event.preventDefault();
-      if (!commandsMenu.hidden) {
+      if (captureCancel) {
+        captureCancel();
+        captureCancel = null;
+        setStatus('已取消截图或拾取');
+      } else if (!attachMenu.hidden) {
+        showAttachMenu(false);
+        attachToggle.focus();
+      } else if (!commandsMenu.hidden) {
         showCommands(false);
       } else if (!contextMenu.hidden) {
         showContext(false);
@@ -680,20 +1232,25 @@ export function mountAssistant(button, editor) {
     }
   });
 
-  function addMessage(role, text, model = '') {
+  function addMessage(role, text, model = '', msgAttachments = []) {
     control('empty').hidden = true;
     const historyView = control('history');
     const item = append(historyView, 'article', '', `ai-message ai-${role}`);
     const heading = append(item, 'header');
     append(heading, 'strong', role === 'user' ? '你' : model || '模型');
     if (role === 'user') {
-      if (text.length > 420) {
-        append(item, 'p', `${text.slice(0, 160)}…\n…${text.slice(-100)}`, 'ai-request-preview');
-        const original = append(item, 'details', '', 'ai-request-original');
-        append(original, 'summary', '查看完整输入');
-        append(original, 'p', text);
-      } else {
-        append(item, 'p', text);
+      renderMessageAttachments(item, msgAttachments, {
+        onPreview: (att) => openAttachmentLightbox(att, { fetchMedia: fetchAttachmentMediaUrl }),
+      });
+      if (text) {
+        if (text.length > 420) {
+          append(item, 'p', `${text.slice(0, 160)}…\n…${text.slice(-100)}`, 'ai-request-preview');
+          const original = append(item, 'details', '', 'ai-request-original');
+          append(original, 'summary', '查看完整输入');
+          append(original, 'p', text);
+        } else {
+          append(item, 'p', text);
+        }
       }
       return item;
     }
@@ -748,7 +1305,9 @@ export function mountAssistant(button, editor) {
     control('approval').hidden = !request;
     if (request) {
       control('approval-action').textContent = request.action;
-      control('approval-target').textContent = request.target;
+      control('approval-target').textContent = request.target || '';
+      control('allow').textContent = '批准本次';
+      control('deny').textContent = '拒绝';
       control('allow').disabled = false;
       control('deny').disabled = false;
     }
@@ -820,8 +1379,12 @@ export function mountAssistant(button, editor) {
   }
 
   function restoreRequest(job) {
-    if (prompt.value) return;
-    prompt.value = job.input;
+    if (!prompt.value && job.input) prompt.value = job.input;
+    if (!attachments.length && job.attachments?.length) {
+      attachments = [...job.attachments];
+      renderAttachments();
+      renderContext();
+    }
     job.message?.remove();
     control('empty').hidden = Boolean(control('history').children.length);
   }
@@ -844,7 +1407,8 @@ export function mountAssistant(button, editor) {
 
   async function submitPrompt(input, compacting = false) {
     const request = input.trim();
-    if ((!request && !compacting) || active || chatsBusy || permissionBusy) return;
+    const pendingAttachments = compacting ? [] : [...attachments];
+    if ((!request && !pendingAttachments.length && !compacting) || active || chatsBusy || permissionBusy || recordingBusy) return;
     if (compacting && !chat) {
       setStatus('当前没有可压缩的对话。', true);
       return;
@@ -856,9 +1420,12 @@ export function mountAssistant(button, editor) {
     const effort = mode === 'off' ? 'off' : (level || 'auto');
     const model = modelSelect.value;
     const modelName = catalog[model]?.name || model;
-    const job = { id: '', input, started: Date.now(), cancelled: false, phases: ['preparing'], effects: [],
-      estimatedTokens: historyTokens + estimateTokens(request ? JSON.stringify(request) : '') };
+    const imageCapable = catalog[model]?.image_input !== false;
+    const attachCost = pendingAttachments.reduce((sum, att) => sum + estimateAttachmentTokens(att, imageCapable), 0);
+    const job = { id: '', input, attachments: pendingAttachments, started: Date.now(), cancelled: false, phases: ['preparing'], effects: [],
+      estimatedTokens: historyTokens + attachCost + estimateTokens(request ? JSON.stringify(request) : '') };
     active = job;
+    showAttachMenu(false);
     showCommands(false);
     showContext(false);
     showReasoning(false);
@@ -869,14 +1436,17 @@ export function mountAssistant(button, editor) {
       const before = compacting ? null : editor.snapshot();
       const attached = compacting ? null : editor.attach(before);
       if (!compacting) {
-        job.message = addMessage('user', request);
+        job.message = addMessage('user', request, '', pendingAttachments);
         prompt.value = '';
+        attachments = [];
+        renderAttachments();
       }
       setStatus('');
       scrollToLatest();
       showProgress(job.phases, job.started);
       const result = await apiCall('assistant_start', editor.mode, compacting ? 'compact' : 'auto',
-        compacting ? '/compact' : request, attached?.data ?? null, null, model, effort, chat, modelName, permission);
+        compacting ? '/compact' : request, attached?.data ?? null, null, model, effort, chat, modelName, permission,
+        pendingAttachments.length ? pendingAttachments : null);
       job.id = result.data.id;
       if (job.cancelled) {
         await apiCall('assistant_cancel', job.id);
@@ -904,7 +1474,7 @@ export function mountAssistant(button, editor) {
             setStatus('上下文已压缩，原对话仍可查看。');
             return;
           }
-          historyTokens += estimateTokens(request) + estimateTokens(reply.message);
+          historyTokens += attachCost + estimateTokens(request) + estimateTokens(reply.message);
           const message = addMessage('assistant', reply.message, modelName);
           showTrace(message, job.phases, Math.round((Date.now() - job.started) / 1000));
           showEffects(message, job.effects);

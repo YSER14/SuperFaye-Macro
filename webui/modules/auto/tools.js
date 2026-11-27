@@ -247,23 +247,20 @@
             var regionStart = null;
 
             function calcLogicCoords(px, py) {
-                var dpiScale = data.dpi_scale || 1.0;
                 if (coordMode === 'relative') {
                     return {
                         x: Math.round(px / data.width * 1000) / 1000,
                         y: Math.round(py / data.height * 1000) / 1000
                     };
                 } else if (coordMode === 'screen') {
-                    var physX = data.origin_x + px;
-                    var physY = data.origin_y + py;
                     return {
-                        x: Math.round(physX / dpiScale * 100) / 100,
-                        y: Math.round(physY / dpiScale * 100) / 100
+                        x: Math.round(data.origin_x + px),
+                        y: Math.round(data.origin_y + py)
                     };
                 } else {
                     return {
-                        x: Math.round(px / dpiScale * 100) / 100,
-                        y: Math.round(py / dpiScale * 100) / 100
+                        x: Math.round(px),
+                        y: Math.round(py)
                     };
                 }
             }
@@ -319,7 +316,6 @@
                 var rh = Math.abs(py - regionStart.y);
                 if (rw < 5 || rh < 5) { regionStart = null; return; }
                 var x1 = Math.min(regionStart.x, px), y1 = Math.min(regionStart.y, py);
-                var dpiScale = data.dpi_scale || 1.0;
                 var logicRect;
                 if (coordMode === 'relative') {
                     logicRect = [
@@ -329,20 +325,18 @@
                         Math.round(rh / data.height * 1000) / 1000
                     ];
                 } else if (coordMode === 'screen') {
-                    var physX1 = data.origin_x + x1;
-                    var physY1 = data.origin_y + y1;
                     logicRect = [
-                        Math.round(physX1 / dpiScale * 100) / 100,
-                        Math.round(physY1 / dpiScale * 100) / 100,
-                        Math.round(rw / dpiScale * 100) / 100,
-                        Math.round(rh / dpiScale * 100) / 100
+                        Math.round(data.origin_x + x1),
+                        Math.round(data.origin_y + y1),
+                        Math.round(rw),
+                        Math.round(rh)
                     ];
                 } else {
                     logicRect = [
-                        Math.round(x1 / dpiScale * 100) / 100,
-                        Math.round(y1 / dpiScale * 100) / 100,
-                        Math.round(rw / dpiScale * 100) / 100,
-                        Math.round(rh / dpiScale * 100) / 100
+                        Math.round(x1),
+                        Math.round(y1),
+                        Math.round(rw),
+                        Math.round(rh)
                     ];
                 }
                 self._fillRegionInput(logicRect);

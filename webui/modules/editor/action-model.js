@@ -5,6 +5,11 @@ export function parseNumber(text, fallback = 0) {
   return Number.isFinite(n) ? n : fallback;
 }
 
+export function parseLoopCount(value) {
+  if (value == null || (typeof value === 'string' && !value.trim())) return 1;
+  return Math.max(0, Math.round(parseNumber(value, 1)));
+}
+
 export function pathKey(path) {
   return Array.isArray(path) ? path.join('.') : '';
 }
@@ -127,7 +132,7 @@ export function normalizeAction(action) {
   const cmd = String(action[0]).trim().toLowerCase();
 
   if (cmd === 'loop') {
-    const count = Math.max(1, parseNumber(action[1], 1));
+    const count = parseLoopCount(action[1]);
     const block = Array.isArray(action[2]) ? action[2].map((row) => normalizeAction(row)) : [];
     return ['loop', count, block];
   }
@@ -193,7 +198,7 @@ export function formatActionLabel(action, expanded) {
     return `// ${noteText}`;
   }
   if (cmd === 'loop') {
-    const count = Math.max(1, parseNumber(action[1], 1));
+    const count = parseLoopCount(action[1]);
     const block = Array.isArray(action[2]) ? action[2] : [];
     return expanded
       ? `循环 ×${count}（展开，共 ${block.length} 条）`

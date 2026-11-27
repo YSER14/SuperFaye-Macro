@@ -20,22 +20,30 @@ use core::console::RingConsole;
 use core::paths::AppPaths;
 
 fn main() {
-    let paths = AppPaths::detect();
-    if let Err(err) = paths.ensure_dirs() {
-        eprintln!("初始化目录失败: {err}");
-    }
-    let console = Arc::new(RingConsole::default());
-    let state = Arc::new(AppState::new(paths, console));
-
-    let args: Vec<String> = std::env::args().collect();
-    if args.iter().any(|a| a == "--smoke-health") {
-        #[cfg(not(debug_assertions))]
+    let smoke = std::env::args_os().any(|arg| arg == "--smoke-health");
+    #[cfg(not(debug_assertions))]
+    if smoke {
         unsafe {
             unsafe extern "system" {
                 fn AttachConsole(dw_process_id: u32) -> i32;
             }
             let _ = AttachConsole(u32::MAX);
         }
+    }
+
+    let paths = AppPaths::detect();
+    if let Err(err) = paths.ensure_dirs() {
+        let message = format!("初始化目录失败: {err}");
+        if smoke {
+            println!("{}", core::response::err_msg(message));
+            std::process::exit(1);
+        }
+        eprintln!("{message}");
+    }
+    let console = Arc::new(RingConsole::default());
+    let state = Arc::new(AppState::new(paths, console));
+
+    if smoke {
         let res = state.dispatch("health", vec![]);
         println!("{}", serde_json::to_string_pretty(&res).unwrap_or_default());
         return;

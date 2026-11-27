@@ -5,7 +5,7 @@
  * 只影响显示层：宏文件内容、拖拽排序、loop 展开、批量注释、执行逻辑全都不变；
  * 积木块视图（中文动作名，一行一条）仍是默认视图。
  *
- * 方块口径（对齐 X-Mouse Button Control 的 {TAG} 与 docs/宏标签参考卡.md）：
+ * 方块口径（对齐 X-Mouse Button Control 的 {TAG} 与宏格式参考）：
  *     键动作      -> 一块「e / ↓」：↓ = 按下、↑ = 松开；动作后的延迟单独一块虚线「300ms」
  *     鼠标键动作  -> 左/右键换成罗技鼠标标识（按下的那半边填色）+ ↓/↑；中键、侧键仍用文字名
  *     wait        -> 一块「300ms」：不再写“延迟”，只留毫秒数
@@ -18,7 +18,7 @@
  * 其中 {MOVE}/{REPEAT}/{IMPORT}/{NOTE} 是本项目扩展，XMBC 原生没有。
  */
 
-import { formatActionLabel, getRecoverableActionFromNoteText, parseNumber } from './action-model.js';
+import { formatActionLabel, getRecoverableActionFromNoteText, parseNumber, parseLoopCount } from './action-model.js';
 import { RECOVERABLE_NOTE_PREFIX } from '../core/constants.js';
 
 export const ACTION_VIEW_BLOCK = 'block';
@@ -114,7 +114,7 @@ export function formatActionXmbc(action, expanded = false) {
   }
 
   if (cmd === 'loop') {
-    const count = Math.max(1, parseNumber(action[1], 1));
+    const count = parseLoopCount(action[1]);
     return expanded ? `{REPEAT:${count}}` : `{REPEAT:${count}} … {/REPEAT}`;
   }
 
@@ -266,7 +266,7 @@ export function describeActionChip(action, expanded = false) {
   }
 
   if (cmd === 'loop') {
-    const count = Math.max(1, parseNumber(action[1], 1));
+    const count = parseLoopCount(action[1]);
     return { main: '循环', sub: `×${count}`, tone: 'flow', title };
   }
 
@@ -305,8 +305,8 @@ export function buildXmbcLine(rows) {
       if (!Array.isArray(row) || !row.length) return;
       const cmd = String(row[0]).toLowerCase();
       if (cmd === 'loop') {
-        const count = Math.max(1, parseNumber(row[1], 1));
-        out += `{REPEAT:${count}}${walk(Array.isArray(row[2]) ? row[2] : [])}{/REPEAT}`;
+        const count = parseLoopCount(row[1]);
+        if (count > 0) out += `{REPEAT:${count}}${walk(Array.isArray(row[2]) ? row[2] : [])}{/REPEAT}`;
         return;
       }
       // 宏组只是编辑期的抽屉：预览的宏串里把内容按顺序倒出来，不留任何标记
@@ -338,7 +338,8 @@ export function buildMacroStats(rows) {
 
       if (cmd === 'loop') {
         blocks += 1;
-        const count = Math.max(1, parseNumber(row[1], 1));
+        const count = parseLoopCount(row[1]);
+        if (count === 0) return;
         const before = durationMs;
         walk(Array.isArray(row[2]) ? row[2] : []);
         durationMs = before + (durationMs - before) * count;

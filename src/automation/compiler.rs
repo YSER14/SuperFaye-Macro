@@ -358,6 +358,11 @@ pub fn parse_graph(json_data: &Value) -> ExecGraph {
     graph.errors.extend(extra_errors);
     graph.warnings.extend(extra_warnings);
 
+    if has_flow_cycle(&graph) {
+        graph.errors.push("图中存在循环连线，请使用循环节点或跳转节点".to_string());
+        return graph;
+    }
+
     // Forbid control/goto inside monitor branches
     let mids = graph.monitor_entry_ids.clone();
     let mut goto_err = Vec::new();
@@ -366,19 +371,24 @@ pub fn parse_graph(json_data: &Value) -> ExecGraph {
     }
     graph.errors.extend(goto_err);
 
-    // Warn when control/loop_while condition is outside loop body
+    // Warn only when a flow-driven loop_while condition node sits outside the loop body
+    // (pure data-wired detection/utility/variable nodes are re-evaluated automatically each pass).
     let mut loop_warns = Vec::new();
     for nid in &node_order {
         let node = &graph.nodes[nid];
         if node.node_type == "control/loop_while" {
             for src in node.get_data_inputs("cond") {
                 if let Some(src_node) = graph.nodes.get(&src.source_node_id) {
-                    if !src_node.node_type.starts_with("monitor/") {
+                    let auto_refreshed = src_node.flow_children.is_empty()
+                        && (src_node.node_type.starts_with("detection/")
+                            || src_node.node_type.starts_with("utility/")
+                            || src_node.node_type.starts_with("variable/"));
+                    if !src_node.node_type.starts_with("monitor/") && !auto_refreshed {
                         let mut body_children = HashSet::new();
                         collect_flow_children(&graph, nid, "body", &mut HashSet::new(), &mut body_children);
                         if !body_children.contains(&src.source_node_id) {
                             loop_warns.push(format!(
-                                "条件循环 {nid} 的条件输入来自循环体外部节点 {}，条件值在循环中不会更新，可能导致无限循环或立即退出",
+                                "条件循环 {nid} 的条件输入来自循环体外部的流程节点 {}，条件值在循环中不会更新，可能导致无限循环或立即退出",
                                 src.source_node_id
                             ));
                         }
@@ -390,6 +400,32 @@ pub fn parse_graph(json_data: &Value) -> ExecGraph {
     graph.warnings.extend(loop_warns);
 
     graph
+}
+
+fn has_flow_cycle(graph: &ExecGraph) -> bool {
+    let mut incoming: HashMap<&str, usize> = graph.nodes.keys().map(|id| (id.as_str(), 0)).collect();
+    for node in graph.nodes.values() {
+        for child in node.flow_children.values().flatten() {
+            *incoming.get_mut(child.as_str()).expect("validated flow target") += 1;
+        }
+    }
+
+    let mut ready: Vec<&str> = incoming
+        .iter()
+        .filter_map(|(&id, &count)| (count == 0).then_some(id))
+        .collect();
+    let mut visited = 0;
+    while let Some(id) = ready.pop() {
+        visited += 1;
+        for child in graph.nodes[id].flow_children.values().flatten() {
+            let remaining = incoming.get_mut(child.as_str()).expect("validated flow target");
+            *remaining -= 1;
+            if *remaining == 0 {
+                ready.push(child.as_str());
+            }
+        }
+    }
+    visited < graph.nodes.len()
 }
 
 fn val_to_id(v: &Value) -> String {
@@ -404,21 +440,19 @@ fn check_goto_in_flow(
     visited: &mut HashSet<String>,
     errors: &mut Vec<String>,
 ) {
-    if !visited.insert(node_id.to_string()) {
-        return;
-    }
-    let Some(node) = graph.nodes.get(node_id) else {
-        return;
-    };
-    if node.node_type == "control/goto" {
-        errors.push(format!(
-            "监视器节点的触发分支中包含跳转节点 {node_id}，监视器中不允许使用跳转"
-        ));
-        return;
-    }
-    for children in node.flow_children.values() {
-        for cid in children {
-            check_goto_in_flow(graph, cid, visited, errors);
+    let mut pending = vec![node_id];
+    while let Some(id) = pending.pop() {
+        if !visited.insert(id.to_string()) {
+            continue;
+        }
+        if let Some(node) = graph.nodes.get(id) {
+            if node.node_type == "control/goto" {
+                errors.push(format!(
+                    "监视器节点的触发分支中包含跳转节点 {id}，监视器中不允许使用跳转"
+                ));
+            } else {
+                pending.extend(node.flow_children.values().flatten().map(String::as_str));
+            }
         }
     }
 }
@@ -433,15 +467,14 @@ fn collect_flow_children(
     let Some(node) = graph.nodes.get(node_id) else {
         return;
     };
-    for cid in node.get_flow_children(port_name) {
+    let mut pending: Vec<&String> = node.get_flow_children(port_name).iter().collect();
+    while let Some(cid) = pending.pop() {
         if !visited.insert(cid.clone()) {
             continue;
         }
         result.insert(cid.clone());
         if let Some(child) = graph.nodes.get(cid) {
-            for p in child.flow_children.keys() {
-                collect_flow_children(graph, cid, p, visited, result);
-            }
+            pending.extend(child.flow_children.values().flatten());
         }
     }
 }
@@ -449,6 +482,22 @@ fn collect_flow_children(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rejects_flow_cycles_even_in_disconnected_branches() {
+        let graph = parse_graph(&json!({"graph": {
+            "nodes": [
+                {"id": "start", "type": "flow/start"},
+                {"id": "wait", "type": "action/wait"}
+            ],
+            "connections": [
+                {"type": "flow", "from": {"node": "wait", "port": "next"},
+                 "to": {"node": "wait", "port": "in"}}
+            ]
+        }}));
+        assert_eq!(graph.entry_node_id.as_deref(), Some("start"));
+        assert!(graph.errors.iter().any(|err| err.contains("循环连线")));
+    }
 
     #[test]
     fn compiler_validation_rules_match_python_suite() {
@@ -495,12 +544,27 @@ mod tests {
         }));
         assert!(g_mon_goto.errors.iter().any(|e| e.contains("监视器") && e.contains("跳转")));
 
-        let g_while_warn = parse_graph(&json!({
+        let g_while_data_only = parse_graph(&json!({
             "graph":{"nodes":[
                 {"id":"1","type":"flow/start"},
                 {"id":"2","type":"detection/check_color"},
                 {"id":"3","type":"control/loop_while"}
             ],"connections":[
+                {"from":{"node":"1","port":"next"},"to":{"node":"3","port":"in"},"type":"flow"},
+                {"from":{"node":"2","port":"result"},"to":{"node":"3","port":"cond"},"type":"data"}
+            ]}
+        }));
+        assert!(!g_while_data_only.warnings.iter().any(|w| w.contains("循环体外部")));
+
+        let g_while_warn = parse_graph(&json!({
+            "graph":{"nodes":[
+                {"id":"1","type":"flow/start"},
+                {"id":"2","type":"detection/check_color"},
+                {"id":"3","type":"control/loop_while"},
+                {"id":"4","type":"action/wait"}
+            ],"connections":[
+                {"from":{"node":"1","port":"next"},"to":{"node":"2","port":"in"},"type":"flow"},
+                {"from":{"node":"2","port":"no"},"to":{"node":"4","port":"in"},"type":"flow"},
                 {"from":{"node":"1","port":"next"},"to":{"node":"3","port":"in"},"type":"flow"},
                 {"from":{"node":"2","port":"result"},"to":{"node":"3","port":"cond"},"type":"data"}
             ]}

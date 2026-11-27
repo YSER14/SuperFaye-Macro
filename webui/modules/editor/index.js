@@ -364,9 +364,9 @@ function bindEditorActions() {
       }
       const ret = await apiCall('save_macro', path, rows);
       markEditorClean();
-      const synced = Number(ret && ret.cache_refreshed) || 0;
-      showToast(synced > 0
-        ? `宏已保存，并同步了 ${synced} 个触发键缓存：${path}`
+      const cacheRefreshed = !!(ret && ret.cache_refreshed);
+      showToast(cacheRefreshed
+        ? `宏已保存，并已同步触发键缓存：${path}`
         : `宏已保存：${path}`);
       const { refreshMacros } = await import('../macro-bind.js');
       await refreshMacros();

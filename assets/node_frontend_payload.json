@@ -762,7 +762,7 @@
             10,
             10
           ],
-          "description": "检测区域[x,y,w,h]"
+          "description": "检测区域[x,y,w,h]。相对窗口时：四个值都在 0 到 1（含）则按客户区比例计算，因此 [0,0,1,1] 表示整个窗口；只要有一个值大于 1，则全部按像素。"
         },
         "hwnd_var": {
           "type": "string",
@@ -788,17 +788,18 @@
             "change"
           ],
           "default": "contain",
-          "description": "检测模式"
+          "description": "contain=区域内是否包含目标色；exact=区域内全部像素都匹配；change=区域画面变化"
         },
         "sample_mode": {
           "type": "string",
           "enum": [
             "center",
             "mean",
-            "max_diff"
+            "max_diff",
+            "closest"
           ],
           "default": "center",
-          "description": "采样模式"
+          "description": "contain 时扫描整个区域判断是否包含目标色（center 与 max_diff 相同，取最小色差的像素）；mean=用区域平均色比较。max_diff 是历史名称，也可用 closest。"
         },
         "change_threshold": {
           "type": "number",
@@ -866,7 +867,7 @@
             100,
             30
           ],
-          "description": "检测区域[x,y,w,h]"
+          "description": "检测区域[x,y,w,h]。相对窗口时：四个值都在 0 到 1（含）则按客户区比例计算，因此 [0,0,1,1] 表示整个窗口；只要有一个值大于 1，则全部按像素。"
         },
         "hwnd_var": {
           "type": "string",
@@ -900,10 +901,11 @@
         "engine": {
           "type": "string",
           "enum": [
+            "winrt",
             "rapidocr"
           ],
-          "default": "rapidocr",
-          "description": "OCR引擎"
+          "default": "winrt",
+          "description": "实际使用 Windows 系统 OCR（WinRT）。rapidocr 为旧值别名，同样走系统 OCR。"
         },
         "cache_strategy": {
           "type": "string",
@@ -986,7 +988,7 @@
             0,
             0
           ],
-          "description": "搜索区域[x,y,w,h], 0=全屏"
+          "description": "搜索区域[x,y,w,h], 0=全屏。相对窗口时：四个值都在 0 到 1（含）则按客户区比例计算，因此 [0,0,1,1] 表示整个窗口；只要有一个值大于 1，则全部按像素。"
         },
         "hwnd_var": {
           "type": "string",
@@ -1017,7 +1019,7 @@
         "multi_match": {
           "type": "boolean",
           "default": false,
-          "description": "是否匹配多个结果"
+          "description": "是否匹配多个结果（最多 10 个）"
         },
         "store_var": {
           "type": "string",
@@ -1446,7 +1448,7 @@
             0,
             0
           ],
-          "description": "搜索区域，0=全屏"
+          "description": "搜索区域，0=全屏。相对窗口时：四个值都在 0 到 1（含）则按客户区比例计算，因此 [0,0,1,1] 表示整个窗口；只要有一个值大于 1，则全部按像素。"
         },
         "hwnd_var": {
           "type": "string",
@@ -1512,7 +1514,7 @@
             100,
             30
           ],
-          "description": "检测区域[x,y,w,h]"
+          "description": "检测区域[x,y,w,h]。相对窗口时：四个值都在 0 到 1（含）则按客户区比例计算，因此 [0,0,1,1] 表示整个窗口；只要有一个值大于 1，则全部按像素。"
         },
         "hwnd_var": {
           "type": "string",
@@ -1532,10 +1534,11 @@
         "engine": {
           "type": "string",
           "enum": [
+            "winrt",
             "rapidocr"
           ],
-          "default": "rapidocr",
-          "description": "OCR引擎"
+          "default": "winrt",
+          "description": "实际使用 Windows 系统 OCR（WinRT）。rapidocr 为旧值别名，同样走系统 OCR。"
         },
         "store_var": {
           "type": "string",
@@ -2018,7 +2021,7 @@
             10,
             10
           ],
-          "description": "检测区域[x,y,w,h]"
+          "description": "检测区域[x,y,w,h]。相对窗口时：四个值都在 0 到 1（含）则按客户区比例计算，因此 [0,0,1,1] 表示整个窗口；只要有一个值大于 1，则全部按像素。"
         },
         "hwnd_var": {
           "type": "string",
@@ -2116,7 +2119,7 @@
             100,
             30
           ],
-          "description": "检测区域[x,y,w,h]"
+          "description": "检测区域[x,y,w,h]。相对窗口时：四个值都在 0 到 1（含）则按客户区比例计算，因此 [0,0,1,1] 表示整个窗口；只要有一个值大于 1，则全部按像素。"
         },
         "hwnd_var": {
           "type": "string",
@@ -2150,10 +2153,11 @@
         "engine": {
           "type": "string",
           "enum": [
+            "winrt",
             "rapidocr"
           ],
-          "default": "rapidocr",
-          "description": "OCR引擎"
+          "default": "winrt",
+          "description": "实际使用 Windows 系统 OCR（WinRT）。rapidocr 为旧值别名，同样走系统 OCR。"
         },
         "interval": {
           "type": "number",

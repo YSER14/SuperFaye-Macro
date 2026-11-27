@@ -965,14 +965,15 @@ function runGraph() {
 var _statusPollInterval = null;
 function startStatusPolling() {
   if (_statusPollInterval) clearInterval(_statusPollInterval);
-  _statusPollInterval = setInterval(function() {
-    if (AutomationCore.executionState !== 'RUNNING') {
+  var timer = _statusPollInterval = setInterval(function() {
+    if (AutomationCore.executionState !== 'RUNNING' && AutomationCore.executionState !== 'PAUSED') {
       clearInterval(_statusPollInterval);
       _statusPollInterval = null;
       return;
     }
     if (window.pywebview && window.pywebview.api && window.pywebview.api.get_automation_status) {
       window.pywebview.api.get_automation_status().then(function(res) {
+        if (_statusPollInterval !== timer) return;
         if (res && res.ok && res.data && res.data.status) {
           var st = res.data.status.toUpperCase();
           if (st === 'COMPLETED') {
@@ -1577,13 +1578,19 @@ function runPreview(defKey, nodeId) {
         })
         .catch(function(err) { area.innerHTML = '<span style="color:var(--red)">' + _aeEsc(err.message || err) + '</span>'; });
     } else if (defKey.indexOf('check_ocr') >= 0 || defKey.indexOf('monitor_ocr') >= 0) {
-      window.pywebview.api.preview_ocr(params.mode, JSON.stringify(params.rect || [0,0,100,30]), params.hwnd_var || '', params.engine || 'rapidocr')
+      window.pywebview.api.preview_ocr(params.mode, JSON.stringify(params.rect || [0,0,100,30]), params.hwnd_var || '')
         .then(function(res) {
           if (res && res.ok && res.data) {
             var d = res.data;
+            var confLabel = '-';
+            var conf = Number(d.confidence);
+            if (isFinite(conf) && conf > 0) {
+              if (conf <= 1) conf = conf * 100;
+              confLabel = conf.toFixed(1) + '%';
+            }
             area.innerHTML = '<div style="text-align:center">' +
               '<div style="font-family:var(--fmo);font-size:13px">' + _aeEsc(d.text || '(空)') + '</div>' +
-              '<div style="font-size:10px;color:var(--txt3);margin-top:4px">置信度：' + (d.confidence ? _aeEsc(d.confidence.toFixed(1)) : '-') + '%</div>' +
+              '<div style="font-size:10px;color:var(--txt3);margin-top:4px">置信度：' + _aeEsc(confLabel) + '</div>' +
             '</div>';
           } else {
             area.innerHTML = '<span style="color:var(--red)">' + _aeEsc((res && res.error) || '预览失败') + '</span>';

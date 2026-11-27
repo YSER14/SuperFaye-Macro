@@ -84,10 +84,10 @@ impl RingConsole {
         (items, latest_id)
     }
 
-    pub fn clear(&self) {
+    pub fn clear(&self) -> u64 {
         let mut st = self.inner.lock();
         st.entries.clear();
-        st.next_id = 1;
+        st.next_id.saturating_sub(1)
     }
 }
 
@@ -116,5 +116,12 @@ mod tests {
         assert_eq!(latest2, 120);
         assert_eq!(tail.len(), 5);
         assert_eq!(tail[0].text, "line 116");
+        let cursor = c.clear();
+        assert_eq!(cursor, latest);
+        c.info("after clear");
+        let (after, latest) = c.poll(cursor, 10);
+        assert_eq!(after.len(), 1);
+        assert_eq!(after[0].text, "after clear");
+        assert_eq!(latest, cursor + 1);
     }
 }

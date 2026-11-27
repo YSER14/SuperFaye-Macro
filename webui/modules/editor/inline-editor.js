@@ -1,6 +1,6 @@
 import { state } from '../core/state.js';
 import { q } from '../core/dom.js';
-import { parseNumber, pathKey, getRecoverableActionFromNoteText } from './action-model.js';
+import { parseNumber, parseLoopCount, pathKey, getRecoverableActionFromNoteText } from './action-model.js';
 import { setSelectedLine, getActionAtPath } from './action-ops.js';
 import { getDefaultForType, getActionFormUi, updateActionFormUiForType, fillActionEditorByAction, buildActionFromInputs } from './action-form.js';
 import { RECOVERABLE_NOTE_PREFIX } from '../core/constants.js';
@@ -29,7 +29,7 @@ export function getInlineEditorValues(action) {
     return { type: cmd, arg1: String(Math.max(0, parseNumber(action[1], 50))), arg2: '' };
   }
   if (cmd === 'loop') {
-    return { type: cmd, arg1: String(Math.max(1, parseNumber(action[1], 1))), arg2: '' };
+    return { type: cmd, arg1: String(parseLoopCount(action[1])), arg2: '' };
   }
   if (cmd === 'group') {
     return { type: cmd, arg1: String(action[1] ?? '新组'), arg2: '' };

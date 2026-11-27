@@ -15,6 +15,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
 
 /// Signature tag placed in `dwExtraInfo` on every injected keyboard event so hooks can ignore self-echo.
 pub const MACRO_KEYBOARD_EVENT_TAG: usize = 0x4D445549;
+/// Signature tag placed in `dwExtraInfo` on every injected mouse event so hooks can ignore self-echo.
+pub const MACRO_MOUSE_EVENT_TAG: usize = 0x4D44554A;
 
 #[derive(Deserialize)]
 struct KeyCatalog {
@@ -41,7 +43,7 @@ static COMPILED_KEYS: Lazy<CompiledKeys> = Lazy::new(|| {
         serde_json::from_str(KEY_CATALOG_RAW).expect("assets/key_catalog.json must be valid JSON");
     let raw_val: serde_json::Value =
         serde_json::from_str(KEY_CATALOG_RAW).expect("assets/key_catalog.json must be valid JSON");
-    let vk_names = raw_val
+    let vk_names: Vec<String> = raw_val
         .get("VK_MAP")
         .and_then(|v| v.as_object())
         .map(|obj| obj.keys().cloned().collect())
@@ -53,10 +55,10 @@ static COMPILED_KEYS: Lazy<CompiledKeys> = Lazy::new(|| {
         }
     }
     let mut vk_to_name = HashMap::new();
-    for (name, &vk) in &parsed.vk_map {
-        vk_to_name
-            .entry(vk)
-            .or_insert_with(|| name.clone());
+    for name in &vk_names {
+        if let Some(&vk) = parsed.vk_map.get(name) {
+            vk_to_name.entry(vk).or_insert_with(|| name.clone());
+        }
     }
     CompiledKeys {
         vk_map: parsed.vk_map,
@@ -71,7 +73,7 @@ pub fn vk_names_ordered() -> &'static [String] {
     &COMPILED_KEYS.vk_names
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum MouseBtn {
     Left,
     Right,
@@ -168,7 +170,7 @@ pub fn build_mouse_click_input(btn: MouseBtn, up: bool) -> INPUT {
                 mouseData: 0,
                 dwFlags: flags,
                 time: 0,
-                dwExtraInfo: 0,
+                dwExtraInfo: MACRO_MOUSE_EVENT_TAG,
             },
         },
     }
@@ -184,37 +186,47 @@ pub fn build_mouse_move_rel_input(dx: i32, dy: i32) -> INPUT {
                 mouseData: 0,
                 dwFlags: MOUSEEVENTF_MOVE,
                 time: 0,
-                dwExtraInfo: 0,
+                dwExtraInfo: MACRO_MOUSE_EVENT_TAG,
             },
         },
     }
 }
 
-#[allow(dead_code)]
-pub fn build_mouse_move_abs_input(x: i32, y: i32) -> INPUT {
+pub fn virtual_screen_normalized(x: i32, y: i32) -> (i32, i32) {
     unsafe {
         let vx = GetSystemMetrics(SM_XVIRTUALSCREEN);
         let vy = GetSystemMetrics(SM_YVIRTUALSCREEN);
         let vw = GetSystemMetrics(SM_CXVIRTUALSCREEN).max(1);
         let vh = GetSystemMetrics(SM_CYVIRTUALSCREEN).max(1);
-        let nx = (((x - vx) as f64) * 65535.0 / ((vw - 1).max(1) as f64)).round() as i32;
-        let ny = (((y - vy) as f64) * 65535.0 / ((vh - 1).max(1) as f64)).round() as i32;
-        INPUT {
-            r#type: INPUT_MOUSE,
-            Anonymous: INPUT_0 {
-                mi: MOUSEINPUT {
-                    dx: nx,
-                    dy: ny,
-                    mouseData: 0,
-                    dwFlags: MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK,
-                    time: 0,
-                    dwExtraInfo: 0,
-                },
-            },
-        }
+        // Sample pixel centers across [0, 65536) so Windows' floor(val * size / 65536) maps back 1:1.
+        (normalize_screen_axis(x, vx, vw), normalize_screen_axis(y, vy, vh))
     }
 }
 
+fn normalize_screen_axis(position: i32, origin: i32, size: i32) -> i32 {
+    let pixel_center = f64::from(position) - f64::from(origin) + 0.5;
+    ((pixel_center * 65536.0 / f64::from(size)).floor() as i32).clamp(0, 65535)
+}
+
+pub fn build_mouse_move_abs_input(x: i32, y: i32) -> INPUT {
+    let (nx, ny) = virtual_screen_normalized(x, y);
+    INPUT {
+        r#type: INPUT_MOUSE,
+        Anonymous: INPUT_0 {
+            mi: MOUSEINPUT {
+                dx: nx,
+                dy: ny,
+                mouseData: 0,
+                dwFlags: MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK,
+                time: 0,
+                dwExtraInfo: MACRO_MOUSE_EVENT_TAG,
+            },
+        },
+    }
+}
+
+/// Build a `MOUSEEVENTF_WHEEL` input packet. `delta` is already in Win32 `WHEEL_DELTA` units
+/// (`120` per wheel notch, positive = scroll up), matching automation nodes and XMBC reverse rules.
 pub fn build_mouse_scroll_input(delta: i32) -> INPUT {
     INPUT {
         r#type: INPUT_MOUSE,
@@ -222,10 +234,10 @@ pub fn build_mouse_scroll_input(delta: i32) -> INPUT {
             mi: MOUSEINPUT {
                 dx: 0,
                 dy: 0,
-                mouseData: (delta * 120) as u32,
+                mouseData: delta as u32,
                 dwFlags: MOUSEEVENTF_WHEEL,
                 time: 0,
-                dwExtraInfo: 0,
+                dwExtraInfo: MACRO_MOUSE_EVENT_TAG,
             },
         },
     }
@@ -266,15 +278,28 @@ pub fn build_unicode_char_inputs(ch: char) -> Vec<INPUT> {
 }
 
 pub fn send_inputs(packets: &[INPUT]) -> Result<(), String> {
+    send_inputs_with_progress(packets).map_err(|err| err.message)
+}
+
+pub struct InputSendError {
+    pub sent: usize,
+    pub message: String,
+}
+
+pub fn send_inputs_with_progress(packets: &[INPUT]) -> Result<(), InputSendError> {
     if packets.is_empty() {
         return Ok(());
     }
     let sent = unsafe { SendInput(packets, std::mem::size_of::<INPUT>() as i32) };
     if sent != packets.len() as u32 {
-        return Err(format!(
-            "SendInput 发送数量不匹配: 期望 {}, 实际 {sent}",
-            packets.len()
-        ));
+        let os_err = std::io::Error::last_os_error();
+        return Err(InputSendError {
+            sent: sent as usize,
+            message: format!(
+                "SendInput 发送数量不匹配: 期望 {}, 实际 {sent} ({os_err})",
+                packets.len()
+            ),
+        });
     }
     Ok(())
 }
@@ -321,6 +346,13 @@ mod tests {
     }
 
     #[test]
+    fn virtual_screen_axis_clamps_extreme_offsets_without_wrapping() {
+        assert_eq!(normalize_screen_axis(i32::MAX, -1920, 3840), 65535);
+        assert_eq!(normalize_screen_axis(i32::MIN, 128, 1920), 0);
+        assert_eq!(normalize_screen_axis(-1920, -1920, 1920), 17);
+    }
+
+    #[test]
     fn pause_uses_virtual_key_not_scancode() {
         let vk = get_vk("pause");
         assert_eq!(vk, 0x13);
@@ -329,6 +361,17 @@ mod tests {
             assert_eq!(pkt.Anonymous.ki.wVk.0, 0x13);
             assert_eq!(pkt.Anonymous.ki.wScan, 0);
             assert_eq!(pkt.Anonymous.ki.dwFlags.0, 0);
+        }
+    }
+
+    #[test]
+    fn wheel_delta_passes_through_without_double_120_scaling() {
+        let up = build_mouse_scroll_input(120);
+        let down = build_mouse_scroll_input(-120);
+        unsafe {
+            assert_eq!(up.Anonymous.mi.mouseData, 120);
+            assert_eq!(down.Anonymous.mi.mouseData as i32, -120);
+            assert_eq!(up.Anonymous.mi.dwExtraInfo, MACRO_MOUSE_EVENT_TAG);
         }
     }
 }

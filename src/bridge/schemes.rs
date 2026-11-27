@@ -121,49 +121,55 @@ impl SchemeManager {
         copy_from_active: bool,
         switch: bool,
     ) -> Value {
-        let mut st = self.inner.lock();
-        let display = if name.trim().is_empty() {
-            next_scheme_name(&st.schemes)
-        } else {
-            name.trim().to_string()
-        };
-        if st.schemes.iter().any(|s| s.name == display) {
-            return err_msg(format!("方案名已存在：{display}"));
-        }
+        config.with_binding_lock(|| {
+            let mut st = self.inner.lock();
+            let display = if name.trim().is_empty() {
+                next_scheme_name(&st.schemes)
+            } else {
+                name.trim().to_string()
+            };
+            if st.schemes.iter().any(|s| s.name == display) {
+                return err_msg(format!("方案名已存在：{display}"));
+            }
 
-        let base = if copy_from_active {
-            st.schemes.iter().find(|s| s.id == st.active_id).cloned()
-        } else {
-            None
-        };
-        let max_order = st.schemes.iter().map(|s| s.order).max().unwrap_or(-1);
-        let scheme = Scheme {
-            id: gen_scheme_id(),
-            name: display,
-            order: max_order + 1,
-            bindings: base.as_ref().map(|b| b.bindings.clone()).unwrap_or_default(),
-            runtime: base.as_ref().map(|b| b.runtime.clone()).unwrap_or_default(),
-        };
-        let brief_out;
-        st.schemes.push(scheme.clone());
+            let base = if copy_from_active {
+                st.schemes.iter().find(|s| s.id == st.active_id).cloned()
+            } else {
+                None
+            };
+            let max_order = st.schemes.iter().map(|s| s.order).max().unwrap_or(-1);
+            let scheme = Scheme {
+                id: gen_scheme_id(),
+                name: display,
+                order: max_order + 1,
+                bindings: base.as_ref().map(|b| b.bindings.clone()).unwrap_or_default(),
+                runtime: base.as_ref().map(|b| b.runtime.clone()).unwrap_or_default(),
+            };
+            let prev_active = st.active_id.clone();
+            st.schemes.push(scheme.clone());
 
-        if switch {
-            sync_active_from_config(&mut st, config);
-            st.active_id = scheme.id.clone();
-            apply_active_to_config(&st, config);
-            let _ = config.save_to_disk(config_path);
-        }
-        if let Err(err) = save_schemes_locked(schemes_path, &st) {
-            return err_detail("新建方案失败", err);
-        }
-        brief_out = scheme_brief(&scheme, &st.active_id);
+            if switch {
+                sync_active_from_config(&mut st, config);
+                st.active_id = scheme.id.clone();
+            }
+            if let Err(err) = save_schemes_locked(schemes_path, &st) {
+                st.active_id = prev_active;
+                st.schemes.pop();
+                return err_detail("新建方案失败", err);
+            }
+            if switch {
+                apply_active_to_config(&st, config);
+                let _ = config.save_to_disk(config_path);
+            }
+            let brief_out = scheme_brief(&scheme, &st.active_id);
 
-        ok_fields([
-            ("scheme", brief_out),
-            ("active", json!(st.active_id)),
-            ("switched", json!(switch)),
-            ("copied", json!(base.is_some())),
-        ])
+            ok_fields([
+                ("scheme", brief_out),
+                ("active", json!(st.active_id)),
+                ("switched", json!(switch)),
+                ("copied", json!(base.is_some())),
+            ])
+        })
     }
 
     pub fn duplicate_scheme(
@@ -175,54 +181,61 @@ impl SchemeManager {
         name: &str,
         switch: bool,
     ) -> Value {
-        let mut st = self.inner.lock();
-        sync_active_from_config(&mut st, config);
+        config.with_binding_lock(|| {
+            let mut st = self.inner.lock();
+            sync_active_from_config(&mut st, config);
 
-        let target_id = if scheme_id.trim().is_empty() {
-            st.active_id.as_str()
-        } else {
-            scheme_id.trim()
-        };
-        let Some(source) = st.schemes.iter().find(|s| s.id == target_id).cloned() else {
-            return err_msg("要复制的方案不存在");
-        };
-        let display = if name.trim().is_empty() {
-            let mut candidate = format!("{} - 副本", source.name);
-            let mut idx = 2;
-            while st.schemes.iter().any(|s| s.name == candidate) {
-                candidate = format!("{} - 副本{idx}", source.name);
-                idx += 1;
+            let target_id = if scheme_id.trim().is_empty() {
+                st.active_id.as_str()
+            } else {
+                scheme_id.trim()
+            };
+            let Some(source) = st.schemes.iter().find(|s| s.id == target_id).cloned() else {
+                return err_msg("要复制的方案不存在");
+            };
+            let display = if name.trim().is_empty() {
+                let mut candidate = format!("{} - 副本", source.name);
+                let mut idx = 2;
+                while st.schemes.iter().any(|s| s.name == candidate) {
+                    candidate = format!("{} - 副本{idx}", source.name);
+                    idx += 1;
+                }
+                candidate
+            } else {
+                name.trim().to_string()
+            };
+            if st.schemes.iter().any(|s| s.name == display) {
+                return err_msg(format!("方案名已存在：{display}"));
             }
-            candidate
-        } else {
-            name.trim().to_string()
-        };
-        if st.schemes.iter().any(|s| s.name == display) {
-            return err_msg(format!("方案名已存在：{display}"));
-        }
 
-        let max_order = st.schemes.iter().map(|s| s.order).max().unwrap_or(-1);
-        let scheme = Scheme {
-            id: gen_scheme_id(),
-            name: display,
-            order: max_order + 1,
-            bindings: source.bindings,
-            runtime: source.runtime,
-        };
-        st.schemes.push(scheme.clone());
-        if switch {
-            st.active_id = scheme.id.clone();
-            apply_active_to_config(&st, config);
-            let _ = config.save_to_disk(config_path);
-        }
-        if let Err(err) = save_schemes_locked(schemes_path, &st) {
-            return err_detail("复制方案失败", err);
-        }
-        ok_fields([
-            ("scheme", scheme_brief(&scheme, &st.active_id)),
-            ("active", json!(st.active_id)),
-            ("switched", json!(switch)),
-        ])
+            let max_order = st.schemes.iter().map(|s| s.order).max().unwrap_or(-1);
+            let scheme = Scheme {
+                id: gen_scheme_id(),
+                name: display,
+                order: max_order + 1,
+                bindings: source.bindings,
+                runtime: source.runtime,
+            };
+            let prev_active = st.active_id.clone();
+            st.schemes.push(scheme.clone());
+            if switch {
+                st.active_id = scheme.id.clone();
+            }
+            if let Err(err) = save_schemes_locked(schemes_path, &st) {
+                st.active_id = prev_active;
+                st.schemes.pop();
+                return err_detail("复制方案失败", err);
+            }
+            if switch {
+                apply_active_to_config(&st, config);
+                let _ = config.save_to_disk(config_path);
+            }
+            ok_fields([
+                ("scheme", scheme_brief(&scheme, &st.active_id)),
+                ("active", json!(st.active_id)),
+                ("switched", json!(switch)),
+            ])
+        })
     }
 
     pub fn rename_scheme(&self, schemes_path: &Path, scheme_id: &str, name: &str) -> Value {
@@ -257,30 +270,38 @@ impl SchemeManager {
         config: &ConfigStore,
         scheme_id: &str,
     ) -> Value {
-        let mut st = self.inner.lock();
-        let id_trim = scheme_id.trim();
-        if !st.schemes.iter().any(|s| s.id == id_trim) {
-            return err_msg("方案不存在");
-        }
-        if st.schemes.len() <= 1 {
-            return err_msg("至少保留一个方案；要腾空它，可以把里面的绑定逐个解绑");
-        }
-        let was_active = id_trim == st.active_id;
-        st.schemes.retain(|s| s.id != id_trim);
-        if was_active {
-            st.active_id = st.schemes[0].id.clone();
-            apply_active_to_config(&st, config);
-            let _ = config.save_to_disk(config_path);
-        }
-        if let Err(err) = save_schemes_locked(schemes_path, &st) {
-            return err_detail("删除方案失败", err);
-        }
-        let active_name = scheme_name(&st, &st.active_id);
-        ok_fields([
-            ("active", json!(st.active_id)),
-            ("active_name", json!(active_name)),
-            ("switched", json!(was_active)),
-        ])
+        config.with_binding_lock(|| {
+            let mut st = self.inner.lock();
+            let id_trim = scheme_id.trim();
+            if !st.schemes.iter().any(|s| s.id == id_trim) {
+                return err_msg("方案不存在");
+            }
+            if st.schemes.len() <= 1 {
+                return err_msg("至少保留一个方案；要腾空它，可以把里面的绑定逐个解绑");
+            }
+            let prev_schemes = st.schemes.clone();
+            let prev_active = st.active_id.clone();
+            let was_active = id_trim == st.active_id;
+            st.schemes.retain(|s| s.id != id_trim);
+            if was_active {
+                st.active_id = st.schemes[0].id.clone();
+            }
+            if let Err(err) = save_schemes_locked(schemes_path, &st) {
+                st.schemes = prev_schemes;
+                st.active_id = prev_active;
+                return err_detail("删除方案失败", err);
+            }
+            if was_active {
+                apply_active_to_config(&st, config);
+                let _ = config.save_to_disk(config_path);
+            }
+            let active_name = scheme_name(&st, &st.active_id);
+            ok_fields([
+                ("active", json!(st.active_id)),
+                ("active_name", json!(active_name)),
+                ("switched", json!(was_active)),
+            ])
+        })
     }
 
     pub fn switch_scheme(
@@ -290,34 +311,38 @@ impl SchemeManager {
         config: &ConfigStore,
         scheme_id: &str,
     ) -> Value {
-        let mut st = self.inner.lock();
-        let id_trim = scheme_id.trim();
-        let Some(target) = st.schemes.iter().find(|s| s.id == id_trim).cloned() else {
-            return err_msg("方案不存在");
-        };
-        if target.id == st.active_id {
-            return ok_fields([
-                ("active", json!(st.active_id)),
-                ("active_name", json!(target.name)),
-                ("switched", json!(false)),
-            ]);
-        }
+        config.with_binding_lock(|| {
+            let mut st = self.inner.lock();
+            let id_trim = scheme_id.trim();
+            let Some(target) = st.schemes.iter().find(|s| s.id == id_trim).cloned() else {
+                return err_msg("方案不存在");
+            };
+            if target.id == st.active_id {
+                return ok_fields([
+                    ("active", json!(st.active_id)),
+                    ("active_name", json!(target.name)),
+                    ("switched", json!(false)),
+                ]);
+            }
 
-        let previous_name = scheme_name(&st, &st.active_id);
-        sync_active_from_config(&mut st, config);
-        st.active_id = target.id.clone();
-        apply_active_to_config(&st, config);
-        let _ = config.save_to_disk(config_path);
-        if let Err(err) = save_schemes_locked(schemes_path, &st) {
-            return err_detail("切换方案失败", err);
-        }
-        ok_fields([
-            ("active", json!(target.id)),
-            ("active_name", json!(target.name)),
-            ("previous_name", json!(previous_name)),
-            ("switched", json!(true)),
-            ("binding_count", json!(target.bindings.len())),
-        ])
+            let previous_id = st.active_id.clone();
+            let previous_name = scheme_name(&st, &previous_id);
+            sync_active_from_config(&mut st, config);
+            st.active_id = target.id.clone();
+            if let Err(err) = save_schemes_locked(schemes_path, &st) {
+                st.active_id = previous_id;
+                return err_detail("切换方案失败", err);
+            }
+            apply_active_to_config(&st, config);
+            let _ = config.save_to_disk(config_path);
+            ok_fields([
+                ("active", json!(target.id)),
+                ("active_name", json!(target.name)),
+                ("previous_name", json!(previous_name)),
+                ("switched", json!(true)),
+                ("binding_count", json!(target.bindings.len())),
+            ])
+        })
     }
 
     pub fn reorder_schemes(&self, schemes_path: &Path, ordered_ids: Option<&Value>) -> Value {

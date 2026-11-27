@@ -2,19 +2,10 @@
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8" />
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; frame-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' data: blob:; font-src 'self'; frame-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>SuperFaye Macro</title>
-  <script>
-    /* 防主题闪烁：渲染前同步本地主题 */
-    (function () {
-      try {
-        var t = localStorage.getItem('macrodriver-theme');
-        if (!t) t = matchMedia('(prefers-color-scheme: light)').matches ? 'snow' : 'black';
-        if (t !== 'cream') document.documentElement.setAttribute('data-theme', t);
-      } catch (e) { /* 忽略 */ }
-    })();
-  </script>
+  <script src="theme.js"></script>
   <link rel="icon" type="image/png" href="assets/icon.png" />
   <link rel="stylesheet" href="theme.css" />
   <link rel="stylesheet" href="styles.css" />
@@ -512,6 +503,19 @@
           </aside>
 
           <div class="card params-main-card">
+            <div class="appearance-settings">
+              <div>
+                <label for="uiFontSelect">界面字体</label>
+                <p id="uiFontHint" role="status">选择后立即生效并自动保存</p>
+              </div>
+              <div class="appearance-font-controls">
+                <input id="uiFontSearch" type="search" aria-label="搜索字体" placeholder="搜索中英文名称" autocomplete="off" disabled />
+                <select id="uiFontSelect" aria-describedby="uiFontHint">
+                  <option value="">默认字体</option>
+                </select>
+              </div>
+              <div class="appearance-font-preview" aria-label="字体预览">中文预览 Aa Bb 0123456789</div>
+            </div>
             <div class="param-toolbar">
               <div class="search-field param-search">
                 <svg class="search-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
@@ -582,7 +586,6 @@
 
   <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
 
-  <script src="theme.js"></script>
   <script type="module" src="app.js"></script>
 </body>
 </html>

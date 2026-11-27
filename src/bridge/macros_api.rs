@@ -65,13 +65,29 @@ pub fn collect_macro_files(paths: &AppPaths, query: &str) -> Vec<Value> {
 }
 
 fn walk_json_files(dir: &Path, out: &mut Vec<PathBuf>) {
+    let mut seen = HashSet::new();
+    walk_json_files_inner(dir, out, &mut seen);
+}
+
+fn walk_json_files_inner(dir: &Path, out: &mut Vec<PathBuf>, seen: &mut HashSet<PathBuf>) {
+    if AppPaths::ensure_not_reparse(dir).is_err() {
+        return;
+    }
+    if let Ok(canon) = dir.canonicalize() {
+        if !seen.insert(canon) {
+            return;
+        }
+    }
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
     for entry in entries.flatten() {
         let p = entry.path();
+        if AppPaths::ensure_not_reparse(&p).is_err() {
+            continue;
+        }
         if p.is_dir() {
-            walk_json_files(&p, out);
+            walk_json_files_inner(&p, out, seen);
         } else if p
             .extension()
             .and_then(|e| e.to_str())
@@ -123,7 +139,6 @@ pub fn save_macro(paths: &AppPaths, rel_path: &str, rows_val: Option<&Value>) ->
         Ok(()) => ok_fields([
             ("path", json!(paths.to_rel_slash(&abs))),
             ("count", json!(rows.len())),
-            ("cache_refreshed", json!(0)),
         ]),
         Err(err) => err_detail("保存宏失败", err),
     }
@@ -202,27 +217,29 @@ pub fn rename_macro(
 
     let old_key = paths.to_rel_slash(&old_abs);
     let new_key = paths.to_rel_slash(&new_abs);
-    let mut bindings = config.get_macro_bindings();
-    let mut changed = false;
-    for (_trigger, val) in bindings.iter_mut() {
-        let updated: Vec<Value> = normalize_binding_paths(val)
-            .into_iter()
-            .map(|p| {
-                if normalize_rel(&p) == old_key {
-                    changed = true;
-                    Value::String(new_key.clone())
-                } else {
-                    Value::String(p)
-                }
-            })
-            .collect();
-        *val = Value::Array(updated);
-    }
-    if changed {
-        config.set_macro_bindings(bindings);
-        let _ = config.save_to_disk(&paths.param_config_path);
-        schemes.sync_from_config(&paths.schemes_path, config);
-    }
+    config.with_binding_lock(|| {
+        let mut bindings = config.get_macro_bindings();
+        let mut changed = false;
+        for (_trigger, val) in bindings.iter_mut() {
+            let updated: Vec<Value> = normalize_binding_paths(val)
+                .into_iter()
+                .map(|p| {
+                    if normalize_rel(&p).eq_ignore_ascii_case(&old_key) {
+                        changed = true;
+                        Value::String(new_key.clone())
+                    } else {
+                        Value::String(p)
+                    }
+                })
+                .collect();
+            *val = Value::Array(updated);
+        }
+        if changed {
+            config.set_macro_bindings(bindings);
+            let _ = config.save_to_disk(&paths.param_config_path);
+            schemes.sync_from_config(&paths.schemes_path, config);
+        }
+    });
 
     ok_fields([("path", json!(new_key))])
 }
@@ -242,41 +259,43 @@ pub fn delete_macro(
     }
     let safe_rel_path = paths.to_rel_slash(&abs);
 
-    let bindings = config.get_macro_bindings();
-    let mut runtime = config.get_macro_runtime_settings();
-    let mut updated_bindings = Map::new();
-    let mut changed = false;
-
-    for (trigger, val) in bindings.into_iter() {
-        let orig = normalize_binding_paths(&val);
-        let kept: Vec<String> = orig
-            .iter()
-            .filter(|p| normalize_rel(p) != safe_rel_path)
-            .cloned()
-            .collect();
-        if kept.len() != orig.len() {
-            changed = true;
-        }
-        if kept.is_empty() {
-            runtime.remove(&trigger);
-        } else {
-            updated_bindings.insert(
-                trigger,
-                Value::Array(kept.into_iter().map(Value::String).collect()),
-            );
-        }
-    }
-
     if let Err(err) = std::fs::remove_file(&abs) {
         return err_detail("删除失败", err.to_string());
     }
 
-    if changed {
-        config.set_macro_bindings(updated_bindings);
-        config.set_macro_runtime_settings(runtime);
-        let _ = config.save_to_disk(&paths.param_config_path);
-        schemes.sync_from_config(&paths.schemes_path, config);
-    }
+    config.with_binding_lock(|| {
+        let bindings = config.get_macro_bindings();
+        let mut runtime = config.get_macro_runtime_settings();
+        let mut updated_bindings = Map::new();
+        let mut changed = false;
+
+        for (trigger, val) in bindings.into_iter() {
+            let orig = normalize_binding_paths(&val);
+            let kept: Vec<String> = orig
+                .iter()
+                .filter(|p| !normalize_rel(p).eq_ignore_ascii_case(&safe_rel_path))
+                .cloned()
+                .collect();
+            if kept.len() != orig.len() {
+                changed = true;
+            }
+            if kept.is_empty() {
+                runtime.remove(&trigger);
+            } else {
+                updated_bindings.insert(
+                    trigger,
+                    Value::Array(kept.into_iter().map(Value::String).collect()),
+                );
+            }
+        }
+
+        if changed {
+            config.set_macro_bindings(updated_bindings);
+            config.set_macro_runtime_settings(runtime);
+            let _ = config.save_to_disk(&paths.param_config_path);
+            schemes.sync_from_config(&paths.schemes_path, config);
+        }
+    });
 
     ok_fields([("path", json!(safe_rel_path))])
 }
@@ -286,6 +305,9 @@ pub fn import_macros_from_folder(paths: &AppPaths, folder_path: &str) -> Value {
     if !src.is_dir() {
         return err_msg("目录不存在");
     }
+    if let Err(err) = AppPaths::ensure_not_reparse(src) {
+        return err_msg(err);
+    }
     let mut files = Vec::new();
     walk_json_files(src, &mut files);
     let mut imported = Vec::new();
@@ -293,7 +315,14 @@ pub fn import_macros_from_folder(paths: &AppPaths, folder_path: &str) -> Value {
         let Ok(rel_under) = p.strip_prefix(src) else {
             continue;
         };
-        let mut target = paths.macros_dir.join(rel_under);
+        if AppPaths::ensure_not_reparse(&p).is_err() {
+            continue;
+        }
+        let rel_str = rel_under.to_string_lossy().replace('\\', "/");
+        let mut target = match AppPaths::resolve_under(&paths.macros_dir, &rel_str) {
+            Ok(t) => t,
+            Err(_) => continue,
+        };
         if let Some(par) = target.parent() {
             if let Err(err) = std::fs::create_dir_all(par) {
                 return err_detail("导入宏失败", err.to_string());
@@ -304,8 +333,22 @@ pub fn import_macros_from_folder(paths: &AppPaths, folder_path: &str) -> Value {
             let stem = target
                 .file_stem()
                 .and_then(|s| s.to_str())
-                .unwrap_or("macro");
-            target = target.with_file_name(format!("{stem}_{stamp}.json"));
+                .unwrap_or("macro")
+                .to_string();
+            let mut idx = 0usize;
+            loop {
+                let candidate_name = if idx == 0 {
+                    format!("{stem}_{stamp}.json")
+                } else {
+                    format!("{stem}_{stamp}_{idx}.json")
+                };
+                let candidate = target.with_file_name(candidate_name);
+                if !candidate.exists() {
+                    target = candidate;
+                    break;
+                }
+                idx += 1;
+            }
         }
         if let Err(err) = std::fs::copy(&p, &target) {
             return err_detail("导入宏失败", err.to_string());
@@ -375,7 +418,7 @@ pub fn bind_macro(
     repeat: i64,
     running_press_mode: &str,
 ) -> Value {
-    let key = trigger.trim().to_ascii_lowercase();
+    let key = crate::engine::hooks::normalize_hotkey_name(trigger);
     if key.is_empty() {
         return err_msg("触发键不能为空");
     }
@@ -395,53 +438,55 @@ pub fn bind_macro(
     };
 
     let allow_multi = config.get_bool("webui", "ALLOW_MULTI_MACRO_BIND_PER_KEY", false);
-    let mut bindings = config.get_macro_bindings();
-    let existing = bindings
-        .get(&key)
-        .map(normalize_binding_paths)
-        .unwrap_or_default();
-    let new_paths = if allow_multi {
-        let mut next = existing.clone();
-        if !next.contains(&macro_path) {
-            next.push(macro_path.clone());
-        }
-        next
-    } else {
-        vec![macro_path.clone()]
-    };
-    let replaced_existing =
-        !allow_multi && !existing.is_empty() && (existing.len() > 1 || existing[0] != macro_path);
-
     let repeat_clamped = repeat.max(1);
-    bindings.insert(
-        key.clone(),
-        Value::Array(new_paths.iter().cloned().map(Value::String).collect()),
-    );
-    let mut runtime = config.get_macro_runtime_settings();
-    runtime.insert(
-        key.clone(),
-        json!({
-            "repeat": repeat_clamped,
-            "running_press_mode": mode,
-        }),
-    );
+    config.with_binding_lock(|| {
+        let mut bindings = config.get_macro_bindings();
+        let existing = bindings
+            .get(&key)
+            .map(normalize_binding_paths)
+            .unwrap_or_default();
+        let new_paths = if allow_multi {
+            let mut next = existing.clone();
+            if !next.contains(&macro_path) {
+                next.push(macro_path.clone());
+            }
+            next
+        } else {
+            vec![macro_path.clone()]
+        };
+        let replaced_existing =
+            !allow_multi && !existing.is_empty() && (existing.len() > 1 || existing[0] != macro_path);
 
-    config.set_macro_bindings(bindings);
-    config.set_macro_runtime_settings(runtime);
-    if let Err(err) = config.save_to_disk(&paths.param_config_path) {
-        return err_detail("绑定宏失败", err);
-    }
-    schemes.sync_from_config(&paths.schemes_path, config);
+        bindings.insert(
+            key.clone(),
+            Value::Array(new_paths.iter().cloned().map(Value::String).collect()),
+        );
+        let mut runtime = config.get_macro_runtime_settings();
+        runtime.insert(
+            key.clone(),
+            json!({
+                "repeat": repeat_clamped,
+                "running_press_mode": mode,
+            }),
+        );
 
-    ok_fields([
-        ("trigger", json!(key)),
-        ("macro_path", json!(macro_path)),
-        ("macro_paths", json!(new_paths)),
-        ("macro_count", json!(new_paths.len())),
-        ("repeat", json!(repeat_clamped)),
-        ("running_press_mode", json!(mode)),
-        ("replaced_existing", json!(replaced_existing)),
-    ])
+        config.set_macro_bindings(bindings);
+        config.set_macro_runtime_settings(runtime);
+        if let Err(err) = config.save_to_disk(&paths.param_config_path) {
+            return err_detail("绑定宏失败", err);
+        }
+        schemes.sync_from_config(&paths.schemes_path, config);
+
+        ok_fields([
+            ("trigger", json!(key)),
+            ("macro_path", json!(macro_path)),
+            ("macro_paths", json!(new_paths)),
+            ("macro_count", json!(new_paths.len())),
+            ("repeat", json!(repeat_clamped)),
+            ("running_press_mode", json!(mode)),
+            ("replaced_existing", json!(replaced_existing)),
+        ])
+    })
 }
 
 pub fn update_binding_runtime(
@@ -452,17 +497,9 @@ pub fn update_binding_runtime(
     repeat: i64,
     running_press_mode: &str,
 ) -> Value {
-    let key = trigger.trim().to_ascii_lowercase();
+    let key = crate::engine::hooks::normalize_hotkey_name(trigger);
     if key.is_empty() {
         return err_msg("触发键不能为空");
-    }
-    let bindings = config.get_macro_bindings();
-    let Some(existing_val) = bindings.get(&key) else {
-        return err_msg(format!("触发键还没绑定宏：{key}"));
-    };
-    let paths_list = normalize_binding_paths(existing_val);
-    if paths_list.is_empty() {
-        return err_msg(format!("触发键还没绑定宏：{key}"));
     }
     let mode_lower = running_press_mode.trim().to_ascii_lowercase();
     let mode = if VALID_RUNNING_PRESS_MODES.contains(&mode_lower.as_str()) {
@@ -472,24 +509,35 @@ pub fn update_binding_runtime(
     };
     let repeat_clamped = repeat.max(1);
 
-    let mut runtime = config.get_macro_runtime_settings();
-    runtime.insert(
-        key.clone(),
-        json!({
-            "repeat": repeat_clamped,
-            "running_press_mode": mode,
-        }),
-    );
-    config.set_macro_runtime_settings(runtime);
-    let _ = config.save_to_disk(&paths.param_config_path);
-    schemes.sync_from_config(&paths.schemes_path, config);
+    config.with_binding_lock(|| {
+        let bindings = config.get_macro_bindings();
+        let Some(existing_val) = bindings.get(&key) else {
+            return err_msg(format!("触发键还没绑定宏：{key}"));
+        };
+        let paths_list = normalize_binding_paths(existing_val);
+        if paths_list.is_empty() {
+            return err_msg(format!("触发键还没绑定宏：{key}"));
+        }
 
-    ok_fields([
-        ("trigger", json!(key)),
-        ("repeat", json!(repeat_clamped)),
-        ("running_press_mode", json!(mode)),
-        ("macro_paths", json!(paths_list)),
-    ])
+        let mut runtime = config.get_macro_runtime_settings();
+        runtime.insert(
+            key.clone(),
+            json!({
+                "repeat": repeat_clamped,
+                "running_press_mode": mode,
+            }),
+        );
+        config.set_macro_runtime_settings(runtime);
+        let _ = config.save_to_disk(&paths.param_config_path);
+        schemes.sync_from_config(&paths.schemes_path, config);
+
+        ok_fields([
+            ("trigger", json!(key)),
+            ("repeat", json!(repeat_clamped)),
+            ("running_press_mode", json!(mode)),
+            ("macro_paths", json!(paths_list)),
+        ])
+    })
 }
 
 pub fn unbind_macro(
@@ -498,16 +546,18 @@ pub fn unbind_macro(
     schemes: &SchemeManager,
     trigger: &str,
 ) -> Value {
-    let key = trigger.trim().to_ascii_lowercase();
-    let mut bindings = config.get_macro_bindings();
-    let mut runtime = config.get_macro_runtime_settings();
-    bindings.remove(&key);
-    runtime.remove(&key);
-    config.set_macro_bindings(bindings);
-    config.set_macro_runtime_settings(runtime);
-    let _ = config.save_to_disk(&paths.param_config_path);
-    schemes.sync_from_config(&paths.schemes_path, config);
-    ok_fields([("trigger", json!(key))])
+    let key = crate::engine::hooks::normalize_hotkey_name(trigger);
+    config.with_binding_lock(|| {
+        let mut bindings = config.get_macro_bindings();
+        let mut runtime = config.get_macro_runtime_settings();
+        bindings.remove(&key);
+        runtime.remove(&key);
+        config.set_macro_bindings(bindings);
+        config.set_macro_runtime_settings(runtime);
+        let _ = config.save_to_disk(&paths.param_config_path);
+        schemes.sync_from_config(&paths.schemes_path, config);
+        ok_fields([("trigger", json!(key))])
+    })
 }
 
 pub fn normalize_binding_paths(value: &Value) -> Vec<String> {
@@ -580,6 +630,60 @@ mod tests {
         assert!(read_res["rows"].is_array());
         let escape_res = read_macro(&p, "../secret.json");
         assert_ne!(escape_res["ok"], true);
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn walk_json_files_skips_reparse_directories() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let tmp = std::env::temp_dir().join(format!("sf_macros_reparse_{}_{nanos}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let macros_dir = tmp.join("宏");
+        let outside = tmp.join("outside");
+        std::fs::create_dir_all(&macros_dir).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(macros_dir.join("ok.json"), "[]\n").unwrap();
+        std::fs::write(outside.join("secret.json"), "[]\n").unwrap();
+
+        #[cfg(windows)]
+        {
+            let junction = macros_dir.join("loop_or_out");
+            // Pass mklink args separately. Putting quotes inside a single `cmd /C`
+            // string gets re-escaped by CreateProcess and fails with ERROR_INVALID_NAME.
+            let output = std::process::Command::new("cmd")
+                .arg("/C")
+                .arg("mklink")
+                .arg("/J")
+                .arg(&junction)
+                .arg(&outside)
+                .output()
+                .expect("spawn mklink");
+            assert!(
+                output.status.success(),
+                "创建测试目录联接失败: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+
+            let up = macros_dir.join("up");
+            let _ = std::process::Command::new("cmd")
+                .arg("/C")
+                .arg("mklink")
+                .arg("/J")
+                .arg(&up)
+                .arg(&tmp)
+                .output();
+        }
+
+        let mut files = Vec::new();
+        walk_json_files(&macros_dir, &mut files);
+        assert!(
+            files.iter().all(|p| p.file_name().and_then(|s| s.to_str()) == Some("ok.json")),
+            "walk should only keep regular json files, got {files:?}"
+        );
+        assert_eq!(files.len(), 1);
         let _ = std::fs::remove_dir_all(&tmp);
     }
 }

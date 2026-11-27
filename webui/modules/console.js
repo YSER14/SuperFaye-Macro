@@ -7,6 +7,8 @@ const consoleEntries = [];
 let consoleFilter = 'all';
 let consoleKeyword = '';
 let autoScroll = true;
+let clearingConsole = false;
+let consoleGeneration = 0;
 
 function classifyLevel(text) {
   const s = String(text || '');
@@ -92,10 +94,12 @@ function renderAllConsole() {
 }
 
 export async function pollConsole() {
-  if (state.pollConsoleBusy) return;
+  if (state.pollConsoleBusy || clearingConsole) return;
   state.pollConsoleBusy = true;
+  const generation = consoleGeneration;
   try {
     const data = await apiCall('poll_console', state.consoleLastId, 120);
+    if (generation !== consoleGeneration) return;
     const entries = data.entries || [];
     if (!entries.length) return;
 
@@ -117,7 +121,7 @@ export async function pollConsole() {
       }
     });
 
-    state.consoleLastId = data.latest_id || state.consoleLastId;
+    state.consoleLastId = entries.at(-1).id;
 
     if (consoleEntries.length > MAX_CONSOLE_ENTRIES) {
       consoleEntries.splice(0, consoleEntries.length - 2600);
@@ -143,12 +147,19 @@ export async function pollConsole() {
 }
 
 export async function clearConsole() {
-  await apiCall('clear_console');
-  state.consoleLastId = 0;
-  state.consoleLineCount = 0;
-  consoleEntries.length = 0;
-  renderAllConsole();
-  showToast('控制台已清空');
+  if (clearingConsole) return;
+  clearingConsole = true;
+  consoleGeneration += 1;
+  try {
+    const result = await apiCall('clear_console');
+    state.consoleLastId = result.latest_id ?? 0;
+    state.consoleLineCount = 0;
+    consoleEntries.length = 0;
+    renderAllConsole();
+    showToast('控制台已清空');
+  } finally {
+    clearingConsole = false;
+  }
 }
 
 export function bindConsoleActions() {

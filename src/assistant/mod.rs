@@ -1,5 +1,7 @@
 pub mod agent;
+pub mod attachments;
 pub mod drafts;
+mod file_tools;
 pub mod history;
 pub mod manager;
 pub mod model;

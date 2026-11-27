@@ -12,6 +12,7 @@ use serde_json::{Value, json};
 use url::Url;
 
 use crate::assistant::drafts::validate_macro;
+use crate::assistant::file_tools::{self, ImageRegion, ZipNameEncoding};
 use crate::bridge::group_lib::GroupLibStore;
 use crate::bridge::macros_api;
 use crate::core::paths::AppPaths;
@@ -460,6 +461,7 @@ impl WorkspaceTools {
         self.protected
             .iter()
             .any(|item| path_is_relative_ci(path, item))
+            || crate::core::paths::is_sensitive_secret_file(path)
     }
 
     async fn perform<F>(
@@ -582,6 +584,16 @@ impl WorkspaceTools {
             let mut buf = Vec::with_capacity(READ_LIMIT + 1);
             let mut take = (&mut f).take((READ_LIMIT + 1) as u64);
             take.read_to_end(&mut buf).map_err(|e| e.to_string())?;
+            if buf.starts_with(b"PK\x03\x04") || buf.starts_with(b"PK\x05\x06") {
+                return Err("这是 ZIP 压缩包，请用 list_archive 或 extract_archive".to_string());
+            }
+            if (buf.contains(&0) || std::str::from_utf8(&buf).is_err())
+                && image::guess_format(&buf).is_ok_and(|format| matches!(format,
+                image::ImageFormat::Png | image::ImageFormat::Jpeg | image::ImageFormat::Bmp
+                    | image::ImageFormat::WebP | image::ImageFormat::Gif
+            )) {
+                return Err("这是图片，请用 inspect_images 或 ocr_images".to_string());
+            }
             if buf.contains(&0) {
                 return Err("文件不是文本".to_string());
             }
@@ -601,6 +613,123 @@ impl WorkspaceTools {
             }))
         })
         .await
+    }
+
+    pub(super) async fn archive(&self, args: &Value, extract: bool) -> Value {
+        let request = || {
+            let source = self.resolve_path(args["path"].as_str().unwrap_or_default())?;
+            if self.is_protected(&source) {
+                return Err("此路径由应用管理".to_string());
+            }
+            let encoding = ZipNameEncoding::parse(&args["encoding"])?;
+            let destination = if extract {
+                let folder = match args.get("destination") {
+                    Some(Value::String(path)) => self.resolve_path(path)?,
+                    None | Some(Value::Null) => file_tools::default_zip_destination(&source)?,
+                    _ => return Err("解压目标应为目录路径".into()),
+                };
+                if self.is_protected(&folder)
+                    || self.protected.iter().any(|p| path_is_relative_ci(p, &folder))
+                    || path_is_relative_ci(&folder, &self.macro_root)
+                    || path_is_relative_ci(&self.macro_root, &folder)
+                {
+                    return Err("请将 ZIP 解压到宏库和应用配置目录以外的新目录".into());
+                }
+                Some(folder)
+            } else {
+                None
+            };
+            Ok((source, destination, encoding))
+        };
+        let (source, destination, encoding) = match request() {
+            Ok(args) => args,
+            Err(error) => return json!({"error": error}),
+        };
+        let root = self.root.read().clone();
+        let outside = !path_is_relative_ci(&source, &root)
+            || destination.as_ref().is_some_and(|p| !path_is_relative_ci(p, &root));
+        let source_label = source.display().to_string();
+        if let Some(destination) = destination {
+            let label = format!("{source_label} → {}", destination.display());
+            let cancelled = Arc::clone(&self.cancelled);
+            self.perform("解压 ZIP", &label, outside, true, false, outside, Some("file"), move || {
+                if normalize_resolve(&source) != source || normalize_resolve(&destination) != destination {
+                    return Err("文件或目标目录在审批后发生变化，请重新检查路径".into());
+                }
+                file_tools::extract_zip(&source, &destination, encoding, &cancelled)
+            }).await
+        } else {
+            let offset = args["offset"].as_u64().unwrap_or(0);
+            let limit = args["limit"].as_u64().unwrap_or(32).clamp(1, 64);
+            self.perform("查看 ZIP 内容", &source_label, outside, false, false, outside, None, move || {
+                if normalize_resolve(&source) != source {
+                    return Err("压缩包路径在审批后发生变化，请重新检查".into());
+                }
+                file_tools::list_zip(&source, usize::try_from(offset).unwrap_or(usize::MAX), limit as usize, encoding)
+            }).await
+        }
+    }
+
+    pub(super) async fn images(&self, args: &Value, visual_service: Option<&str>) -> Value {
+        let limit = if visual_service.is_some() { file_tools::VISION_BATCH } else { file_tools::OCR_BATCH };
+        let Some(paths) = args["paths"].as_array().filter(|paths| !paths.is_empty() && paths.len() <= limit) else {
+            return json!({"error": format!("paths 应提供 1 到 {limit} 张图片的路径")});
+        };
+        let region = match args.get("region") {
+            Some(value) if !value.is_null() => match serde_json::from_value::<ImageRegion>(value.clone()) {
+                Ok(region) => Some(region),
+                Err(_) => return json!({"error": "region 必须包含 x、y、width、height 四个非负像素值"}),
+            },
+            _ => None,
+        };
+        let root = self.root.read().clone();
+        let mut files = Vec::new();
+        let mut errors = Vec::new();
+        for value in paths {
+            let supplied = value.as_str().unwrap_or_default();
+            match self.resolve_path(supplied) {
+                Ok(path) if !self.is_protected(&path) => files.push(path),
+                Ok(_) => errors.push(json!({"path": supplied, "error": "此路径由应用管理"})),
+                Err(error) => errors.push(json!({"path": supplied, "error": error})),
+            }
+        }
+        if files.is_empty() {
+            return json!({"error": "没有可读取的图片", "errors": errors});
+        }
+        let outside = files.iter().any(|path| !path_is_relative_ci(path, &root));
+        let names = files.iter().map(|path| path.display().to_string()).collect::<Vec<_>>().join("\n");
+        let visual = visual_service.is_some();
+        let dark_background = args["dark_background"].as_bool().unwrap_or(false);
+        let action = if visual { "将图片发送给当前模型服务识别" } else { "本地识别图片文字" };
+        let approval_label = match visual_service {
+            Some(service) => format!("{service}\n{names}"),
+            None => names,
+        };
+        let cancelled = Arc::clone(&self.cancelled);
+        self.perform(action, &approval_label, outside, false, visual, visual || outside, None, move || {
+            let mut images = Vec::new();
+            for path in files {
+                file_tools::check_cancelled(&cancelled)?;
+                let result = if normalize_resolve(&path) != path {
+                    Err("图片路径在审批后发生变化，请重新检查".into())
+                } else if visual {
+                    file_tools::encode_image(&path, region)
+                } else {
+                    file_tools::ocr_image(&path, region, dark_background)
+                };
+                match result {
+                    Ok(mut image) => {
+                        image["path"] = json!(path);
+                        images.push(image);
+                    }
+                    Err(error) => errors.push(json!({"path": path, "error": error})),
+                }
+            }
+            if images.is_empty() {
+                return Ok(json!({"error": "没有图片读取成功", "errors": errors}));
+            }
+            Ok(json!({"images": images, "errors": errors}))
+        }).await
     }
 
     pub async fn write_text(&self, path_arg: &str, content: &str, overwrite: bool) -> Value {

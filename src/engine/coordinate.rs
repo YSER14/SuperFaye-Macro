@@ -1,13 +1,17 @@
 use serde::Serialize;
 use windows::core::BOOL;
 use windows::Win32::Foundation::{HWND, LPARAM, POINT, RECT};
-use windows::Win32::Graphics::Gdi::ClientToScreen;
-use windows::Win32::UI::HiDpi::{GetDpiForSystem, GetDpiForWindow};
+use windows::Win32::Graphics::Gdi::{
+    ClientToScreen, MONITOR_DEFAULTTONEAREST, MonitorFromPoint,
+};
+use windows::Win32::UI::HiDpi::{
+    GetDpiForMonitor, GetDpiForSystem, GetDpiForWindow, MDT_EFFECTIVE_DPI,
+};
 use windows::Win32::UI::WindowsAndMessaging::{
-    EnumWindows, GetClassNameW, GetClientRect, GetCursorPos, GetSystemMetrics, GetWindowRect,
-    GetWindowTextLengthW, GetWindowTextW, IsWindow, IsWindowVisible, SM_CXSCREEN,
-    SM_CXVIRTUALSCREEN, SM_CYSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN,
-    SetCursorPos, WindowFromPoint,
+    EnumWindows, GA_ROOT, GetAncestor, GetClassNameW, GetClientRect, GetCursorPos,
+    GetSystemMetrics, GetWindowRect, GetWindowTextLengthW, GetWindowTextW, IsWindow,
+    IsWindowVisible, SM_CXSCREEN, SM_CXVIRTUALSCREEN, SM_CYSCREEN, SM_CYVIRTUALSCREEN,
+    SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SetCursorPos, WindowFromPoint,
 };
 
 #[derive(Debug, Clone, Serialize)]
@@ -108,20 +112,68 @@ pub fn get_client_origin(hwnd_val: isize) -> Option<(i32, i32, i32, i32)> {
     }
 }
 
+pub(crate) fn checked_pixel_offset(origin: i32, offset: f64) -> Result<i32, String> {
+    let value = f64::from(origin) + offset.round();
+    if (f64::from(i32::MIN)..=f64::from(i32::MAX)).contains(&value) {
+        Ok(value as i32)
+    } else {
+        Err("像素坐标超出范围".into())
+    }
+}
+
+/// Map a relative-mode point into the window client area.
+///
+/// If both `x` and `y` lie in `0.0..=1.0`, they are treated as ratios of the client
+/// size: `(0.0, 0.0)` is the top-left corner, `(1.0, 1.0)` is the bottom-right corner,
+/// and a region `[0, 0, 1, 1]` covers the whole client. Values outside that unit square
+/// are client-local pixels. This convention is intentional and must not be changed to
+/// a "1 means 1 pixel" interpretation.
+pub(crate) fn relative_point_in_client(
+    cx: i32, cy: i32, cw: i32, ch: i32, x: f64, y: f64,
+) -> Result<(i32, i32), String> {
+    let (dx, dy) = if (0.0..=1.0).contains(&x) && (0.0..=1.0).contains(&y) {
+        (f64::from(cw.max(1)) * x, f64::from(ch.max(1)) * y)
+    } else {
+        (x, y)
+    };
+    Ok((checked_pixel_offset(cx, dx)?, checked_pixel_offset(cy, dy)?))
+}
+
 /// Convert automation node coordinates (`screen`, `window`, `relative`) into virtual-screen pixels.
-pub fn resolve_xy(mode: &str, x: i32, y: i32, hwnd: isize) -> Result<(i32, i32), String> {
+/// In `relative` mode, normalized `[0.0..=1.0]` values scale against the client size while larger
+/// integer offsets are treated directly as client-local pixels.
+pub fn resolve_xy_f64(mode: &str, x: f64, y: f64, hwnd: isize) -> Result<(i32, i32), String> {
     match mode.trim().to_ascii_lowercase().as_str() {
-        "" | "screen" => Ok((x, y)),
+        "" | "screen" => Ok((checked_pixel_offset(0, x)?, checked_pixel_offset(0, y)?)),
         "window" => {
             let rect = get_window_rect(hwnd).ok_or_else(|| "窗口模式需要有效窗口句柄".to_string())?;
-            Ok((rect[0] + x, rect[1] + y))
+            Ok((checked_pixel_offset(rect[0], x)?, checked_pixel_offset(rect[1], y)?))
         }
         "relative" => {
-            let (cx, cy, _, _) =
+            let (cx, cy, cw, ch) =
                 get_client_origin(hwnd).ok_or_else(|| "相对模式需要有效窗口句柄".to_string())?;
-            Ok((cx + x, cy + y))
+            relative_point_in_client(cx, cy, cw, ch, x, y)
         }
         other => Err(format!("不支持的坐标模式: {other}")),
+    }
+}
+
+#[allow(dead_code)]
+pub fn resolve_xy(mode: &str, x: i32, y: i32, hwnd: isize) -> Result<(i32, i32), String> {
+    resolve_xy_f64(mode, x as f64, y as f64, hwnd)
+}
+
+pub fn root_window_at_point(x: i32, y: i32) -> Option<isize> {
+    unsafe {
+        let mut hwnd = WindowFromPoint(POINT { x, y });
+        if hwnd.0.is_null() {
+            return None;
+        }
+        let root = GetAncestor(hwnd, GA_ROOT);
+        if !root.0.is_null() {
+            hwnd = root;
+        }
+        Some(hwnd.0 as isize)
     }
 }
 
@@ -138,6 +190,19 @@ pub fn get_window_dpi_scale(hwnd_val: isize) -> f64 {
             get_screen_info().scale
         }
     }
+}
+
+pub fn get_dpi_scale_at_point(x: i32, y: i32) -> f64 {
+    unsafe {
+        let hmon = MonitorFromPoint(POINT { x, y }, MONITOR_DEFAULTTONEAREST);
+        let mut dpi_x = 0u32;
+        let mut dpi_y = 0u32;
+        if GetDpiForMonitor(hmon, MDT_EFFECTIVE_DPI, &mut dpi_x, &mut dpi_y).is_ok() && dpi_x > 0
+        {
+            return (dpi_x as f64) / 96.0;
+        }
+    }
+    get_screen_info().scale
 }
 
 pub fn get_window_at_mouse() -> Option<WindowEntry> {
@@ -194,5 +259,32 @@ fn window_entry_from_hwnd(hwnd: HWND) -> Option<WindowEntry> {
             class_name,
             rect,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{relative_point_in_client, resolve_xy_f64};
+
+    #[test]
+    fn relative_point_rejects_overflow_and_non_finite_coordinates() {
+        assert!(relative_point_in_client(i32::MAX, 200, 1000, 500, 50.0, 80.0).is_err());
+        assert!(resolve_xy_f64("screen", f64::NAN, 10.0, 0).is_err());
+        assert_eq!(resolve_xy_f64("screen", -1920.0, 10.4, 0).unwrap(), (-1920, 10));
+    }
+
+    #[test]
+    fn relative_point_supports_ratios_origin_and_pixels() {
+        assert_eq!(relative_point_in_client(100, 200, 1000, 500, 0.25, 0.5).unwrap(), (350, 450));
+        assert_eq!(relative_point_in_client(100, 200, 1000, 500, 0.0, 0.0).unwrap(), (100, 200));
+        assert_eq!(relative_point_in_client(100, 200, 1000, 500, 0.5, 1.0).unwrap(), (600, 700));
+        assert_eq!(relative_point_in_client(100, 200, 1000, 500, 150.0, 80.0).unwrap(), (250, 280));
+    }
+
+    #[test]
+    fn relative_point_handles_unit_edges_consistently() {
+        assert_eq!(relative_point_in_client(100, 200, 1000, 500, 1.0, 0.0).unwrap(), (1100, 200));
+        assert_eq!(relative_point_in_client(100, 200, 1000, 500, 0.0, 1.0).unwrap(), (100, 700));
+        assert_eq!(relative_point_in_client(100, 200, 1000, 500, 1.0, 1.0).unwrap(), (1100, 700));
     }
 }

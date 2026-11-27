@@ -1,4 +1,5 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -7,7 +8,14 @@ use std::time::{Duration, Instant};
 use parking_lot::Mutex;
 use serde_json::{Map, Value, json};
 
-use crate::assistant::agent::{ProgressFn, UsageFn, run_editor_agent};
+use crate::assistant::agent::{
+    ProgressFn, UsageFn, run_editor_agent, run_editor_agent_with_attachments,
+};
+use crate::assistant::attachments::{
+    ChatAttachment, estimate_attachment_tokens, read_attachment_media,
+    sanitize_attachments_for_run, stage_disk_file, stage_payload,
+    summarize_attachments_for_history,
+};
 use crate::assistant::history::{AssistantHistory, HistoryTurn};
 use crate::assistant::model::{AgentConnection, AssistantModel, ModelError, estimate_text_tokens};
 use crate::assistant::tools::{PERMISSIONS, WorkspaceTools};
@@ -65,7 +73,7 @@ struct DraftJob {
     result: Option<Value>,
     phases: Vec<String>,
     approval: Option<Value>,
-    decision: Option<bool>,
+    decision: Option<Value>,
     effects: Vec<Value>,
     chat: String,
     compacting: bool,
@@ -81,6 +89,7 @@ pub struct AssistantManager {
     pub history: Arc<AssistantHistory>,
     jobs: Arc<Mutex<HashMap<String, Arc<Mutex<DraftJob>>>>>,
     job_order: Arc<Mutex<Vec<String>>>,
+    picked_attachments: Arc<Mutex<HashSet<PathBuf>>>,
     runtime: tokio::runtime::Runtime,
     compact_hook: Option<CompactHook>,
     draft_hook: Option<DraftHook>,
@@ -90,7 +99,7 @@ pub struct AssistantManager {
 
 impl AssistantManager {
     pub fn new(paths: AppPaths, console: Arc<RingConsole>, group_lib: Arc<GroupLibStore>) -> Self {
-        let model = Arc::new(AssistantModel::load(&paths.ai_config_path, None));
+        let model = Arc::new(AssistantModel::load(&paths.ai_config_path));
         let history = Arc::new(AssistantHistory::new(&paths.assistant_db_path));
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
@@ -105,6 +114,7 @@ impl AssistantManager {
             history,
             jobs: Arc::new(Mutex::new(HashMap::new())),
             job_order: Arc::new(Mutex::new(Vec::new())),
+            picked_attachments: Arc::new(Mutex::new(HashSet::new())),
             runtime,
             compact_hook: None,
             draft_hook: None,
@@ -134,6 +144,7 @@ impl AssistantManager {
             history,
             jobs: Arc::new(Mutex::new(HashMap::new())),
             job_order: Arc::new(Mutex::new(Vec::new())),
+            picked_attachments: Arc::new(Mutex::new(HashSet::new())),
             runtime,
             compact_hook: None,
             draft_hook: None,
@@ -211,6 +222,116 @@ impl AssistantManager {
         }
     }
 
+    pub fn pick_files(&self, kind: &str) -> Value {
+        let kind_owned = kind.trim().to_ascii_lowercase();
+        let dialog_res = std::thread::Builder::new()
+            .name("AssistantPickFiles".into())
+            .spawn(move || {
+                let mut dialog = rfd::FileDialog::new();
+                match kind_owned.as_str() {
+                    "image" => {
+                        dialog = dialog.add_filter(
+                            "图片文件",
+                            &["png", "jpg", "jpeg", "webp", "bmp", "gif"],
+                        );
+                    }
+                    "audio" => {
+                        dialog = dialog.add_filter(
+                            "音频文件",
+                            &["wav", "mp3", "ogg", "m4a", "flac", "webm"],
+                        );
+                    }
+                    "video" => {
+                        dialog = dialog.add_filter(
+                            "视频文件",
+                            &["mp4", "mov", "webm", "mkv", "avi", "m4v"],
+                        );
+                    }
+                    "archive" => {
+                        dialog = dialog.add_filter("ZIP 压缩包", &["zip"]);
+                    }
+                    "document" | "file" => {
+                        dialog = dialog
+                            .add_filter(
+                                "文档、文本与压缩包",
+                                &[
+                                    "txt", "md", "json", "csv", "log", "xml", "yaml", "yml",
+                                    "ini", "toml", "docx", "xlsx", "pptx", "zip", "py", "js", "rs",
+                                ],
+                            )
+                            .add_filter("所有文件", &["*"]);
+                    }
+                    _ => {
+                        dialog = dialog
+                            .add_filter(
+                                "支持的多模态文件",
+                                &[
+                                    "png", "jpg", "jpeg", "webp", "bmp", "gif", "zip", "txt",
+                                    "md", "json", "csv", "log", "docx", "xlsx", "pptx", "wav",
+                                    "mp3", "ogg", "m4a", "flac", "mp4", "mov", "webm", "mkv",
+                                ],
+                            )
+                            .add_filter("所有文件", &["*"]);
+                    }
+                }
+                dialog.pick_files()
+            })
+            .map_err(|e| format!("无法打开文件选择框：{e}"))
+            .and_then(|h| h.join().map_err(|_| "文件选择框异常退出".to_string()));
+
+        let selected = match dialog_res {
+            Ok(Some(files)) => files,
+            Ok(None) => return assistant_ok(json!({ "canceled": true, "attachments": [] })),
+            Err(msg) => return err_msg(msg),
+        };
+
+        let mut attachments = Vec::new();
+        let mut errors = Vec::new();
+        for abs in selected.into_iter().take(16) {
+            match stage_disk_file(&self.paths, &abs, kind) {
+                Ok(att) => {
+                    if let Ok(canon) = abs.canonicalize() {
+                        let s = canon.to_string_lossy();
+                        let clean = PathBuf::from(s.strip_prefix(r"\\?\").unwrap_or(&s));
+                        self.picked_attachments.lock().insert(clean);
+                    }
+                    attachments.push(att);
+                }
+                Err(err) => {
+                    let name = abs
+                        .file_name()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("文件");
+                    errors.push(format!("{name}: {err}"));
+                }
+            }
+        }
+        if attachments.is_empty() && !errors.is_empty() {
+            return err_msg(errors.join("；"));
+        }
+        assistant_ok(json!({
+            "canceled": false,
+            "attachments": attachments,
+            "errors": errors,
+        }))
+    }
+
+    pub fn stage_attachment(&self, payload: &Value) -> Value {
+        match stage_payload(&self.paths, &self.group_lib, payload) {
+            Ok(att) => assistant_ok(json!({ "attachment": att })),
+            Err(msg) => err_msg(msg),
+        }
+    }
+
+    pub fn read_attachment(&self, raw_path: &str) -> Value {
+        let allowlist = self.picked_attachments.lock().clone();
+        match read_attachment_media(&self.paths, raw_path, &allowlist) {
+            Ok(val) => assistant_ok(val),
+            Err(msg) => err_msg(msg),
+        }
+    }
+
+    #[cfg(test)]
     #[allow(clippy::too_many_arguments)]
     pub fn start(
         &self,
@@ -225,13 +346,57 @@ impl AssistantManager {
         model_name: &str,
         selected_permission: Option<&str>,
     ) -> Value {
+        self.start_with_attachments(
+            mode,
+            scope,
+            prompt,
+            source,
+            history_arg,
+            model,
+            effort,
+            chat,
+            model_name,
+            selected_permission,
+            None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn start_with_attachments(
+        &self,
+        mode: &str,
+        scope: &str,
+        prompt: &str,
+        source: Option<Value>,
+        history_arg: Option<Value>,
+        model: &str,
+        effort: &str,
+        chat: &str,
+        model_name: &str,
+        selected_permission: Option<&str>,
+        attachments_arg: Option<Value>,
+    ) -> Value {
         if !matches!(mode, "macro" | "graph") {
             return err_msg("对话类型无效");
         }
-        if prompt.trim().is_empty() {
-            return err_msg("请输入需求");
-        }
         let compacting = scope == "compact";
+        let picked_snapshot = self.picked_attachments.lock().clone();
+        let attachments: Vec<ChatAttachment> = if compacting {
+            Vec::new()
+        } else {
+            match sanitize_attachments_for_run(
+                &self.paths,
+                &self.group_lib,
+                attachments_arg.as_ref(),
+                &picked_snapshot,
+            ) {
+                Ok(atts) => atts,
+                Err(msg) => return err_msg(msg),
+            }
+        };
+        if prompt.trim().is_empty() && attachments.is_empty() {
+            return err_msg("请输入需求或添加多模态输入");
+        }
         if compacting && chat.is_empty() {
             return err_msg("当前没有可压缩的对话");
         }
@@ -305,7 +470,24 @@ impl AssistantManager {
                 .chars()
                 .take(200)
                 .collect();
-                match self.history.begin(mode, chat, prompt.trim(), &display_model) {
+                let attachments_json = if attachments.is_empty() {
+                    "[]".to_string()
+                } else {
+                    serde_json::to_string(&attachments).unwrap_or_else(|_| "[]".to_string())
+                };
+                let title_fallback = if attachments.is_empty() {
+                    None
+                } else {
+                    Some(summarize_attachments_for_history(&attachments))
+                };
+                match self.history.begin_with_attachments(
+                    mode,
+                    chat,
+                    prompt.trim(),
+                    &display_model,
+                    &attachments_json,
+                    title_fallback.as_deref(),
+                ) {
                     Ok((c, t)) => {
                         active_chat = c;
                         turn_id = t;
@@ -365,37 +547,9 @@ impl AssistantManager {
             let approve_job = Arc::clone(&approve_job);
             let approve_cancel = Arc::clone(&approve_cancel);
             Box::pin(async move {
-                let req_id = format!("{:032x}", rand::random::<u128>());
-                {
-                    let mut g = approve_job.lock();
-                    if approve_cancel.load(Ordering::Acquire) {
-                        return false;
-                    }
-                    g.approval = Some(json!({
-                        "id": req_id,
-                        "action": action,
-                        "target": target,
-                    }));
-                    g.decision = None;
-                }
-                let deadline = Instant::now() + Duration::from_secs(120);
-                let mut result = false;
-                while !approve_cancel.load(Ordering::Acquire) && Instant::now() < deadline {
-                    {
-                        let g = approve_job.lock();
-                        if let Some(d) = g.decision {
-                            result = d;
-                            break;
-                        }
-                    }
-                    tokio::time::sleep(Duration::from_millis(150)).await;
-                }
-                {
-                    let mut g = approve_job.lock();
-                    g.approval = None;
-                    g.decision = None;
-                }
-                result
+                Self::request_decision(approve_job, approve_cancel, json!({
+                    "action": action, "target": target,
+                })).await.as_bool().unwrap_or(false)
             })
         });
 
@@ -447,8 +601,13 @@ impl AssistantManager {
                     history_store.path.clone(),
                     paths.ai_config_path.clone(),
                     paths.param_config_path.clone(),
+                    paths.schemes_path.clone(),
                     paths.group_lib_path.clone(),
                     paths.webview_data_dir.clone(),
+                    paths.logs_dir.clone(),
+                    paths.project_root.join(".cargo"),
+                    paths.project_root.join(".git"),
+                    paths.project_root.join(".env"),
                 ];
                 let tools = Arc::new(WorkspaceTools::new(
                     paths.clone(),
@@ -478,6 +637,9 @@ impl AssistantManager {
                         Arc::clone(&cancelled),
                         report_usage,
                         tools,
+                        attachments,
+                        paths,
+                        picked_snapshot,
                         #[cfg(test)]
                         editor_hook,
                     )
@@ -581,10 +743,39 @@ impl AssistantManager {
         assistant_ok(Value::Object(obj))
     }
 
+    async fn request_decision(job: Arc<Mutex<DraftJob>>, cancelled: Arc<AtomicBool>, mut prompt: Value) -> Value {
+        if cancelled.load(Ordering::Acquire) {
+            return Value::Null;
+        }
+        prompt["id"] = json!(format!("{:032x}", rand::random::<u128>()));
+        {
+            let mut job = job.lock();
+            job.approval = Some(prompt);
+            job.decision = None;
+        }
+        let deadline = Instant::now() + Duration::from_secs(120);
+        let mut result = Value::Null;
+        while !cancelled.load(Ordering::Acquire) && Instant::now() < deadline {
+            if let Some(answer) = job.lock().decision.take() {
+                result = answer;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(150)).await;
+        }
+        let mut job = job.lock();
+        job.approval = None;
+        job.decision = None;
+        result
+    }
+
     pub fn approve(&self, job_id: &str, request_id: &str, allow: Option<bool>) -> Value {
-        let Some(allow_val) = allow else {
+        let Some(allow) = allow else {
             return err_msg("批准请求无效");
         };
+        self.respond(job_id, request_id, json!(allow))
+    }
+
+    fn respond(&self, job_id: &str, request_id: &str, answer: Value) -> Value {
         if job_id.is_empty() || request_id.is_empty() {
             return err_msg("批准请求无效");
         }
@@ -609,7 +800,7 @@ impl AssistantManager {
         {
             return err_msg("这条批准请求已失效");
         }
-        g.decision = Some(allow_val);
+        g.decision = Some(answer);
         ok_empty()
     }
 
@@ -708,6 +899,9 @@ impl AssistantManager {
         cancelled: Arc<AtomicBool>,
         report_usage: UsageFn,
         tools: Arc<WorkspaceTools>,
+        attachments: Vec<ChatAttachment>,
+        paths: AppPaths,
+        picked_allowlist: HashSet<PathBuf>,
         #[cfg(test)] editor_hook: Option<EditorAgentHook>,
     ) -> Result<Value, ModelError> {
         let allowed_scopes: &[&str] = match mode {
@@ -738,10 +932,20 @@ impl AssistantManager {
             .agent_connection(model, effort)
             .map_err(ModelError::Message)?;
         let prompt_clean = prompt.trim();
+        let image_capable = connection.image_input != Some(false);
+        let attachments_cost: usize = attachments
+            .iter()
+            .map(|a| estimate_attachment_tokens(a, image_capable))
+            .sum();
+        let prompt_cost = if prompt_clean.is_empty() {
+            0
+        } else {
+            json_tokens(&Value::String(prompt_clean.to_string()))
+        };
         let mut budget = input_budget(connection.context_window) as isize
-            - json_tokens(&Value::String(prompt_clean.to_string())) as isize;
+            - (prompt_cost + attachments_cost) as isize;
         if budget < 0 {
-            return Ok(err_msg("本轮输入超过当前模型的可用上下文，请缩短输入"));
+            return Ok(err_msg("本轮输入（含多模态附件）超过当前模型的可用上下文，请精简输入或减少附件"));
         }
 
         let mut oversized_scopes = Vec::new();
@@ -800,7 +1004,7 @@ impl AssistantManager {
             )
             .await?
         } else {
-            run_editor_agent(
+            run_editor_agent_with_attachments(
                 &connection,
                 mode,
                 scope,
@@ -812,11 +1016,14 @@ impl AssistantManager {
                 Some(tools),
                 oversized_scopes,
                 Some(report_usage),
+                &attachments,
+                Some(&paths),
+                Some(&picked_allowlist),
             )
             .await?
         };
         #[cfg(not(test))]
-        let data = run_editor_agent(
+        let data = run_editor_agent_with_attachments(
             &connection,
             mode,
             scope,
@@ -828,6 +1035,9 @@ impl AssistantManager {
             Some(tools),
             oversized_scopes,
             Some(report_usage),
+            &attachments,
+            Some(&paths),
+            Some(&picked_allowlist),
         )
         .await?;
 
