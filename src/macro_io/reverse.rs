@@ -4,6 +4,11 @@ use once_cell::sync::Lazy;
 use regex::Regex;
 use serde_json::{Value, json};
 
+use crate::macro_io::brands::{
+    MacroSourceKind, detect_macro_source_kind, parse_logitech_ghub_json, parse_logitech_lua,
+    parse_logitech_xml, parse_razer_xml,
+};
+
 pub const VERSION: &str = "1.0";
 const START_POS: (i64, i64) = (60, 40);
 const CHAIN_X: i64 = 60;
@@ -543,10 +548,42 @@ fn is_valid_sec_timing(s: &str) -> bool {
     }
 }
 
-/// Compact contiguous repeating blocks into native `["loop", count, block]` rows.
-pub fn compact_xmbc_rows(rows: &[Value]) -> (Vec<Value>, usize) {
+pub fn macro_text_to_rows_with_kind(text: &str, strict: bool) -> (MacroSourceKind, Vec<Value>, Vec<String>) {
+    let kind = detect_macro_source_kind(text);
+    let (rows, warnings) = match kind {
+        MacroSourceKind::Xmbc => xmbc_text_to_rows(text, strict),
+        MacroSourceKind::RazerXml => parse_razer_xml(text, strict),
+        MacroSourceKind::LogitechLua => parse_logitech_lua(text, strict),
+        MacroSourceKind::LogitechXml => parse_logitech_xml(text, strict),
+        MacroSourceKind::LogitechGhubJson => parse_logitech_ghub_json(text, strict),
+    };
+    (kind, rows, warnings)
+}
+
+fn count_rows_recursive(rows: &[Value]) -> usize {
+    rows.iter()
+        .map(|row| {
+            let Some(arr) = row.as_array() else {
+                return 1;
+            };
+            let cmd = arr
+                .first()
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim()
+                .to_ascii_lowercase();
+            if matches!(cmd.as_str(), "loop" | "group")
+                && let Some(body) = arr.get(2).and_then(|v| v.as_array())
+            {
+                return 1 + count_rows_recursive(body);
+            }
+            1
+        })
+        .sum()
+}
+
+fn compact_flat_rows(rows: &[Value]) -> Vec<Value> {
     let mut compacted = Vec::new();
-    let mut saved = 0usize;
     let mut start = 0usize;
     let size = rows.len();
 
@@ -583,14 +620,104 @@ pub fn compact_xmbc_rows(rows: &[Value]) -> (Vec<Value>, usize) {
         if best_saved > 0 {
             compacted.push(json!(["loop", best_count, rows[start..start + best_width]]));
             start += best_width * best_count;
-            saved += best_saved;
         } else {
             compacted.push(rows[start].clone());
             start += 1;
         }
     }
 
-    (compacted, saved)
+    compacted
+}
+
+fn as_loop_parts(row: &Value) -> Option<(i64, &[Value])> {
+    let arr = row.as_array()?;
+    let cmd = arr.first()?.as_str()?.trim();
+    if !cmd.eq_ignore_ascii_case("loop") {
+        return None;
+    }
+    let count = arr.get(1)?.as_i64()?;
+    let body = arr.get(2)?.as_array()?.as_slice();
+    Some((count, body))
+}
+
+fn simplify_loop_tree(rows: &[Value]) -> Vec<Value> {
+    // 1. Recursively simplify inner loop/group bodies and unwrap 0/1-count loops.
+    let mut expanded: Vec<Value> = Vec::with_capacity(rows.len());
+    for row in rows {
+        if let Some((count, body)) = as_loop_parts(row) {
+            if count <= 0 {
+                continue;
+            }
+            let inner = simplify_loop_tree(body);
+            if inner.is_empty() {
+                continue;
+            }
+            if count == 1 {
+                expanded.extend(inner);
+            } else if inner.len() == 1
+                && let Some((inner_count, inner_body)) = as_loop_parts(&inner[0])
+                && inner_count > 0
+                && let Some(prod) = count.checked_mul(inner_count)
+            {
+                expanded.push(json!(["loop", prod, inner_body]));
+            } else {
+                expanded.push(json!(["loop", count, inner]));
+            }
+        } else if let Some(arr) = row.as_array()
+            && arr
+                .first()
+                .and_then(|v| v.as_str())
+                .is_some_and(|s| s.trim().eq_ignore_ascii_case("group"))
+            && let Some(body) = arr.get(2).and_then(|v| v.as_array())
+        {
+            let name = arr.get(1).cloned().unwrap_or_else(|| json!("宏组"));
+            expanded.push(json!(["group", name, simplify_loop_tree(body)]));
+        } else {
+            expanded.push(row.clone());
+        }
+    }
+
+    // 2. Merge adjacent identical loops: loop(n, B) + loop(m, B) -> loop(n + m, B).
+    let mut merged: Vec<Value> = Vec::with_capacity(expanded.len());
+    for row in expanded {
+        if let Some((c2, b2)) = as_loop_parts(&row)
+            && let Some(prev) = merged.last_mut()
+            && let Some((c1, b1)) = as_loop_parts(prev)
+            && b1 == b2
+            && let Some(sum) = c1.checked_add(c2)
+        {
+            let body_owned = b1.to_vec();
+            *prev = json!(["loop", sum, body_owned]);
+            continue;
+        }
+        merged.push(row);
+    }
+
+    // 3. Compact contiguous repeating runs and unwrap loop-of-single-loop if created.
+    let compacted = compact_flat_rows(&merged);
+    let mut normalized = Vec::with_capacity(compacted.len());
+    for row in compacted {
+        if let Some((outer, body)) = as_loop_parts(&row)
+            && body.len() == 1
+            && let Some((inner, inner_body)) = as_loop_parts(&body[0])
+            && outer > 0
+            && inner > 0
+            && let Some(prod) = outer.checked_mul(inner)
+        {
+            normalized.push(json!(["loop", prod, inner_body]));
+        } else {
+            normalized.push(row);
+        }
+    }
+    normalized
+}
+
+/// Compact contiguous repeating blocks into native `["loop", count, block]` rows.
+pub fn compact_xmbc_rows(rows: &[Value]) -> (Vec<Value>, usize) {
+    let before = count_rows_recursive(rows);
+    let compacted = simplify_loop_tree(rows);
+    let after = count_rows_recursive(&compacted);
+    (compacted, before.saturating_sub(after))
 }
 
 struct GraphBuilder {
@@ -752,6 +879,24 @@ fn row_to_node(b: &mut GraphBuilder, row: &Value, x: i64, y: i64) -> Option<Stri
                 y,
             ))
         }
+        "move_to" => {
+            let tx = arr.get(1).and_then(|v| v.as_f64()).unwrap_or(0.0);
+            let ty = arr.get(2).and_then(|v| v.as_f64()).unwrap_or(0.0);
+            let dur = arr.get(3).and_then(|v| v.as_f64()).unwrap_or(0.0);
+            Some(b.add(
+                "action/mouse_move",
+                json!({
+                    "mode": "screen",
+                    "x": tx,
+                    "y": ty,
+                    "hwnd_var": "",
+                    "duration": dur,
+                    "easing": "linear",
+                }),
+                x,
+                y,
+            ))
+        }
         "import" => {
             let path = arr.get(1).and_then(|v| v.as_str()).unwrap_or("");
             if path.is_empty() {
@@ -897,7 +1042,10 @@ pub fn rows_to_graph(rows: &[Value], name: &str) -> Value {
 pub fn reverse_macro(text: Option<&str>, rows: Option<&[Value]>, name: &str) -> Value {
     let (resolved_rows, warnings) = match rows {
         Some(r) => (r.to_vec(), Vec::new()),
-        None => xmbc_text_to_rows(text.unwrap_or(""), false),
+        None => {
+            let (_, r, w) = macro_text_to_rows_with_kind(text.unwrap_or(""), false);
+            (r, w)
+        }
     };
     let mut graph = rows_to_graph(&resolved_rows, name);
     if let Some(warns_arr) = graph.get_mut("warnings").and_then(|v| v.as_array_mut()) {
@@ -932,6 +1080,15 @@ fn downgrade_non_native_rows(rows: Vec<Value>) -> (Vec<Value>, Vec<String>) {
                 warns.push(msg);
             }
             out.push(json!(["note", format!("滚轮 {delta}（旧宏格式不支持）")]));
+        } else if cmd == "move_to" {
+            let arr = row.as_array();
+            let x = arr.and_then(|a| a.get(1)).cloned().unwrap_or_else(|| json!(0));
+            let y = arr.and_then(|a| a.get(2)).cloned().unwrap_or_else(|| json!(0));
+            let msg = format!("旧宏格式不支持绝对坐标移动（move_to {x},{y}），已保留为注释");
+            if !warns.contains(&msg) {
+                warns.push(msg);
+            }
+            out.push(json!(["note", format!("绝对移动 ({x}, {y})（旧宏格式不支持）")]));
         } else if cmd == "loop" {
             let count = row.as_array().and_then(|a| a.get(1)).cloned().unwrap_or_else(|| json!(1));
             let body = row
@@ -959,14 +1116,23 @@ pub fn import_macro_rows_payload(
     text: Option<&str>,
     rows: Option<&[Value]>,
     native_only: bool,
-    simplify_xmbc: bool,
+    simplify_macro: bool,
 ) -> Result<Value, String> {
-    let simplify = simplify_xmbc && rows.is_none();
-    let (mut out_rows, mut warnings) = if let Some(r) = rows {
-        (r.to_vec(), Vec::new())
-    } else {
-        xmbc_text_to_rows(text.unwrap_or(""), simplify)
-    };
+    let simplify = simplify_macro && rows.is_none();
+    let (format_code, format_label, error_subject, mut out_rows, mut warnings) =
+        if let Some(r) = rows {
+            ("json_rows", "JSON 宏行", "JSON 宏行", r.to_vec(), Vec::new())
+        } else {
+            let (kind, parsed_rows, parsed_warns) =
+                macro_text_to_rows_with_kind(text.unwrap_or(""), simplify);
+            (
+                kind.code(),
+                kind.label(),
+                kind.error_subject(),
+                parsed_rows,
+                parsed_warns,
+            )
+        };
 
     if native_only {
         let (downgraded_rows, dw_warns) = downgrade_non_native_rows(out_rows);
@@ -979,6 +1145,8 @@ pub fn import_macro_rows_payload(
     }
 
     let mut stats = HashMap::<String, Value>::new();
+    stats.insert("format".to_string(), json!(format_code));
+    stats.insert("format_label".to_string(), json!(format_label));
     if simplify {
         if let Some(first_warn) = warnings.first() {
             let extra = if warnings.len() > 1 {
@@ -987,9 +1155,9 @@ pub fn import_macro_rows_payload(
                 String::new()
             };
             let reason = first_warn.split("，已").next().unwrap_or(first_warn);
-            return Err(format!("无法等价导入这段 XMBC 宏。{reason}{extra}"));
+            return Err(format!("无法等价导入这段 {error_subject}。{reason}{extra}"));
         }
-        let before = out_rows.len();
+        let before = count_rows_recursive(&out_rows);
         let (compacted, saved) = compact_xmbc_rows(&out_rows);
         out_rows = compacted;
         stats.insert(
@@ -1126,5 +1294,90 @@ mod tests {
             assert!(import_macro_rows_payload(Some(&blocked_src), None, true, true).is_err());
             assert!(import_macro_rows_payload(Some(&blocked_src), None, true, false).is_ok());
         }
+    }
+
+    #[test]
+    fn razer_and_logitech_import_and_simplification_work_end_to_end() {
+        // Razer Synapse XML repeated burst -> compacted into loop on simplify=true
+        let razer_unit = r#"
+            <MacroEvent><Type>2</Type><MouseEvent><MouseButton>1</MouseButton><State>0</State></MouseEvent></MacroEvent>
+            <MacroEvent><Type>2</Type><Delay>25</Delay><MouseEvent><MouseButton>1</MouseButton><State>1</State></MouseEvent></MacroEvent>
+            <MacroEvent><Type>3</Type><Delay>10</Delay><MouseMovement><MouseMovementEvent><Type>3</Type><X>0</X><Y>6</Y></MouseMovementEvent></MouseMovement></MacroEvent>
+        "#;
+        let razer_src = format!(
+            "<Macro><Name>Burst</Name><MacroEvents>{}{}{}</MacroEvents></Macro>",
+            razer_unit, razer_unit, razer_unit
+        );
+        let razer_res = import_macro_rows_payload(Some(&razer_src), None, true, true).unwrap();
+        assert_eq!(razer_res["stats"]["format"], "razer_xml");
+        assert_eq!(razer_res["stats"]["simplification"], json!({"before": 15, "after": 6}));
+        assert_eq!(razer_res["rows"][0][0], "loop");
+        assert_eq!(razer_res["rows"][0][1], 3);
+
+        // Razer absolute movement is downgraded in native_only mode and blocks strict simplification
+        let razer_abs = "<MacroEvents><MacroEvent><Type>3</Type><MouseMovement><MouseMovementEvent><Type>1</Type><X>100</X><Y>200</Y></MouseMovementEvent></MouseMovement></MacroEvent></MacroEvents>";
+        assert!(import_macro_rows_payload(Some(razer_abs), None, true, true).is_err());
+        let razer_abs_ok = import_macro_rows_payload(Some(razer_abs), None, true, false).unwrap();
+        assert_eq!(razer_abs_ok["rows"][0][0], "note");
+        let razer_graph = reverse_macro(Some(razer_abs), None, "razer_abs");
+        assert!(razer_graph["graph"]["nodes"].as_array().unwrap().iter().any(|n| n["type"] == "action/mouse_move"));
+
+        // Logitech Lua: OnEvent single trigger + repeated statements + adjacent for-loops merge
+        let lua_src = r#"
+            function OnEvent(event, arg)
+                if event == "MOUSE_BUTTON_PRESSED" and arg == 4 then
+                    for i = 1, 2 do
+                        PressKey("e")
+                        Sleep(30)
+                        ReleaseKey("e")
+                    end
+                    for i = 1, 3 do
+                        PressKey("e")
+                        Sleep(30)
+                        ReleaseKey("e")
+                    end
+                end
+            end
+        "#;
+        let lua_res = import_macro_rows_payload(Some(lua_src), None, true, true).unwrap();
+        assert_eq!(lua_res["stats"]["format"], "logitech_lua");
+        assert_eq!(lua_res["rows"], json!([["loop", 5, [["kd", "e", 0], ["wait", 30], ["ku", "e", 0]]]]));
+
+        // Logitech Lua: MoveMouseWheel blocks strict simplification, works non-strict
+        let lua_wheel = "PressKey(\"w\")\nMoveMouseWheel(1)\nReleaseKey(\"w\")";
+        assert!(import_macro_rows_payload(Some(lua_wheel), None, true, true).is_err());
+        let lua_wheel_ok = import_macro_rows_payload(Some(lua_wheel), None, true, false).unwrap();
+        assert_eq!(lua_wheel_ok["rows"][1][0], "note");
+
+        // Logitech LGS XML repeated keystrokes -> loop
+        let lgs_unit = r#"<key value="A" direction="down"/><delay milliseconds="15"/><key value="A" direction="up"/>"#;
+        let lgs_src = format!(
+            r#"<multikey xmlns="http://www.logitech.com/Cassandra/2010.1/Macros/MultiKey">{lgs_unit}{lgs_unit}{lgs_unit}{lgs_unit}</multikey>"#
+        );
+        let lgs_res = import_macro_rows_payload(Some(&lgs_src), None, true, true).unwrap();
+        assert_eq!(lgs_res["stats"]["format"], "logitech_xml");
+        assert_eq!(lgs_res["rows"][0][0], "loop");
+        assert_eq!(lgs_res["rows"][0][1], 4);
+
+        // Logitech G HUB JSON repeated sequence -> loop
+        let ghub_src = r#"{
+            "macro": {
+                "sequence": {
+                    "simpleSequence": {
+                        "components": [
+                            {"keyboard": {"hidUsage": 4, "isDown": true}},
+                            {"delay": {"durationMs": 20}},
+                            {"keyboard": {"hidUsage": 4}},
+                            {"keyboard": {"hidUsage": 4, "isDown": true}},
+                            {"delay": {"durationMs": 20}},
+                            {"keyboard": {"hidUsage": 4}}
+                        ]
+                    }
+                }
+            }
+        }"#;
+        let ghub_res = import_macro_rows_payload(Some(ghub_src), None, true, true).unwrap();
+        assert_eq!(ghub_res["stats"]["format"], "logitech_ghub_json");
+        assert_eq!(ghub_res["rows"], json!([["loop", 2, [["kd", "a", 0], ["wait", 20], ["ku", "a", 0]]]]));
     }
 }

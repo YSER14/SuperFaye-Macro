@@ -514,7 +514,7 @@ export function bindMacroActions() {
   q('#btnImportMacroText')?.addEventListener('click', () => {
     openImportMacroDialog({
       title: '导入现成宏 → 新建宏文件',
-      note: '转换后会新建一个 .json 宏文件，导完可以直接填触发键绑定执行。',
+      note: '支持 X-Mouse (XMBC)、雷蛇 XML、罗技 Lua/XML/JSON 或 JSON 宏行；转换后会新建一个 .json 宏文件。',
       onRows: async ({ rows }) => {
         const stamp = new Date().toISOString().replace(/[-:]/g, '').replace('T', '_').slice(0, 15);
         const created = await apiCall('create_macro', '宏/导入宏', `导入_${stamp}.json`);

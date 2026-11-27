@@ -684,11 +684,11 @@ function openImportMacroDialog() {
         '<div class="modal-close" data-close="1"><i class="fa-solid fa-xmark"></i></div></div>' +
       '<div class="modal-body" style="display:flex;flex-direction:column;gap:10px">' +
         '<div style="font-size:12px;color:var(--txt3);line-height:1.7">' +
-          '粘贴 <b>XMBC 宏串</b>（<code>{WAITMS:300}{LMB}…</code>）或 <b>旧 JSON 宏行</b>' +
+          '粘贴 <b>XMBC 宏串</b>（<code>{WAITMS:300}{LMB}…</code>）、<b>雷蛇 XML</b>、<b>罗技 Lua / XML / G HUB JSON</b> 或 <b>旧 JSON 宏行</b>' +
           '（<code>[["kd","w",20],["ku","w",0]]</code>）。<br>' +
           '认不出来的标签不会丢，会变成画布上的黄色注释，同时在下面的提示里列出。' +
         '</div>' +
-        '<textarea id="import-macro-text" spellcheck="false" placeholder="{WAITMS:300}{LMB}{WAITMS:120}" ' +
+        '<textarea id="import-macro-text" spellcheck="false" placeholder="{WAITMS:300}{LMB}{WAITMS:120} 或粘贴雷蛇 XML / 罗技 Lua·XML·JSON" ' +
           'style="flex:1;resize:none;padding:10px;border-radius:8px;border:1px solid var(--border);' +
           'background:var(--bg);color:var(--txt);font-family:Consolas,monospace;font-size:12.5px;line-height:1.6"></textarea>' +
         '<div id="import-macro-hint" style="font-size:12px;color:var(--txt3);min-height:18px"></div>' +
@@ -727,11 +727,11 @@ function applyImportedMacro(rawText) {
   var rows = null;
   var name = _currentScriptName && _currentScriptName !== '未命名脚本' ? _currentScriptName : '导入的宏';
 
-  // 看起来像 JSON 行数组就直接按行处理，否则当 XMBC 宏串
+  // 看起来像旧 JSON 宏行二维数组就直接按行处理，否则交给后端自动识别 XMBC / 雷蛇 / 罗技宏
   if (text.charAt(0) === '[') {
     try {
       var parsed = JSON.parse(text);
-      if (Object.prototype.toString.call(parsed) === '[object Array]') rows = parsed;
+      if (Array.isArray(parsed) && parsed.every(function(item) { return Array.isArray(item); })) rows = parsed;
     } catch (err) {
       rows = null;
     }

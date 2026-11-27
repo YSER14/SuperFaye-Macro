@@ -486,7 +486,7 @@ function bindEditorActions() {
 function importRowsIntoEditor() {
   openImportMacroDialog({
     title: '导入现成宏 → 动作列表',
-    allowXmbcSimplification: true,
+    allowSimplification: true,
     onRows: ({ rows, stats }) => {
       const incoming = normalizeMacroRows(rows);
       if (!incoming.length) return;
@@ -495,11 +495,12 @@ function importRowsIntoEditor() {
       setSelectedLine([state.editorRows.length - 1], 'action');
       renderActionList();
       const simplification = stats.simplification;
+      const formatLabel = stats.format_label || '';
       if (simplification) {
         const { before: original, after } = simplification;
         showToast(original === after
-          ? `已导入 ${after} 行，没有可简化的连续重复段`
-          : `已简化并导入，动作行 ${original} → ${after}`);
+          ? `已导入${formatLabel} ${after} 行，没有可简化的连续重复段`
+          : `已简化并导入${formatLabel}，动作行 ${original} → ${after}`);
       } else {
         showToast(`已导入 ${incoming.length} 行（${before} → ${state.editorRows.length}）`);
       }
